@@ -9,3 +9,9 @@ ReactDOM.createRoot(document.getElementById('root')).render(
   </React.StrictMode>
 );
 
+// PWA: yalnızca üretim derlemesinde service worker kaydet (geliştirmede önbellek karışıklığı olmasın)
+if ('serviceWorker' in navigator && import.meta.env.PROD) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch((err) => console.warn('Service worker kaydedilemedi:', err));
+  });
+}

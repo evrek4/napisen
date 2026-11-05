@@ -1,80 +1,117 @@
 # napisen 🔒
-> **Uçtan Uca Şifreli (E2EE), Sıfır Sunucu Depolamalı, Özel İzin Listeli Mesajlaşma Uygulaması**
+
+> Uçtan uca şifreli, yalnızca davetlilere açık, Android ve web'de çalışan mesajlaşma uygulaması.
 
 ---
 
-## 🌟 Temel Özellikler
+## Güvenlik modeli
 
-1. **Özel İzin Listesi (Whitelist):**
-   * Yalnızca belirlenen e-posta adresleri sisteme dahil olabilir.
-   * Tanımlı Varsayılan Adresler:
-     - `fthtrgl@gmail.com`
-     - `mehmetbacar@gmail.com`
-     - `urfahibe@gmail.com`
-   * Yetkisiz hiçbir e-posta adresi uygulamaya giriş yapamaz.
+| Katman | Nasıl çalışır |
+|---|---|
+| **Giriş** | Google hesabı ile (Firebase Authentication). Google hesabınızda iki adımlı doğrulama açıksa o da devrededir. |
+| **İzin listesi** | Sunucuda (`config/allowlist` belgesi) tutulur ve `firestore.rules` ile zorunlu kılınır. Listede olmayan bir hesap, giriş yapsa bile hiçbir veriye erişemez. |
+| **Şifreleme** | Her cihaz kendi **ECDH P-256** anahtar çiftini üretir. Sohbet anahtarı `ECDH → HKDF-SHA256 → AES-GCM-256` ile türetilir. Özel anahtar cihazdan çıkmaz. Sunucu yalnızca şifreli veriyi görür. |
+| **Kişi doğrulama** | Mesaj gönderebilmek için karşı tarafın anahtarı **yüz yüze QR okutarak** (veya 60 haneli güvenlik numarası karşılaştırılarak) doğrulanmalıdır. Anahtar değişirse gönderim otomatik durur ve uyarı çıkar. |
+| **Sunucu kuralları** | Kimse başkası adına mesaj yazamaz, başkasının mesajını okuyamaz veya başkasının açık anahtarını değiştiremez. Kurallar `tests/rules.test.js` ile test edilir. |
 
-2. **Gelişmiş Depolama ve Gizlilik Seçenekleri:**
-   * **Sunucuda Sakla (İsteğe Bağlı):**
-     - *Kapalıyken (Varsayılan):* Mesaj karşı tarafa ulaştığı an Google Firebase'den kalıcı olarak silinir (**0 Bayt depolama**).
-     - *Açıkken:* Uçtan uca şifreli mesajlar sunucuda tutulur, böylece başka bir cihazdan giriş yapıldığında sohbetler geri yüklenebilir.
-   * **Yazılar Cihazda Tutulmasın (Hayalet Mod):**
-     - *Kapalıyken (Varsayılan):* Sohbet geçmişi kullanıcının telefonunun/bilgisayarının kendi yerel hafızasında (IndexedDB) saklanır.
-     - *Açıkken:* Yazışmalar cihaza **kesinlikle kaydedilmez**. Yalnızca aktif oturumda görünür; uygulama veya sekme kapatıldığında cihazdan iz bırakmadan silinir.
-   * *Not:* Bu iki seçeneği hem sağ üstteki **Ayarlar (⚙️) -> Gizlilik Seçenekleri** sekmesinden hem de doğrudan sohbet başlığındaki hızlı butonlardan tek tıkla değiştirebilirsiniz.
+### Gizlilik seçenekleri
+* **Sunucuda Sakla** (varsayılan: kapalı): Kapalıyken mesaj teslim edildiği an sunucudan silinir. Açıkken şifreli kopya sunucuda kalır; yeni cihaza taşındığınızda geçmiş geri yüklenir.
+* **Hayalet Mod** (varsayılan: kapalı): Açıkken mesajlar cihaz hafızasına yazılmaz, sayfa kapanınca kaybolur.
 
-3. **Android ve Web Desteği:**
-   * Hem bilgisayar tarayıcısında (WhatsApp Web gibi) hem de Android cihazlarda çalışır.
-   * **PWA (Progressive Web App):** Android telefonda Chrome ile açıp *"Ana Ekrana Ekle"* dendiğinde tam ekran, bildirim destekli, native benzeri bir mobil uygulama haline gelir.
-
-4. **Zengin İletişim:**
-   * Canlı ses kaydı (süreli mikrofon kaydı, dinleme ve gönderme).
-   * Fotoğraf / görsel gönderme ve tam ekran görüntüleyici.
-   * İletim durumu tikleri (Tek tik: Gönderildi, Çift tik: Teslim edildi).
+### Bilinen sınırlar
+* Bir hesap aynı anda tek bir anahtarla çalışır. Yeni cihaza **taşıma** yapılırsa iki cihaz da aynı anahtarı kullanır; "Sunucuda Sakla" kapalıyken bir mesaj yalnızca onu ilk alan cihazda görünür.
+* Uygulama tamamen kapalıyken bildirim gelmez (bunun için FCM ve bir sunucu fonksiyonu gerekir). Uygulama açık veya arka plandayken bildirim gelir.
+* Kimin kime, ne zaman yazdığı ve medya boyutu sunucuda görünür; mesaj içeriği ve türü görünmez.
 
 ---
 
-## 🚀 Hızlı Başlangıç
+## Kurulum (bir kerelik, ~10 dakika)
 
-### 1. Geliştirme Sunucusunu Başlatma:
+### 1. Firebase projesi
+1. [Firebase Console](https://console.firebase.google.com/) → **Proje ekle**.
+2. **Authentication → Sign-in method → Google**'ı etkinleştirin.
+3. **Authentication → Settings → Authorized domains** listesine uygulamayı yayınlayacağınız alan adını ekleyin (Firebase Hosting kullanırsanız otomatik eklenir).
+4. **Firestore Database → Veritabanı oluştur** (*production mode* seçin; kuralları biz yükleyeceğiz).
+5. **Proje ayarları → Web uygulaması ekle (</>)** ve verilen `firebaseConfig` değerlerini not edin.
+
+### 2. Ortam değişkenleri
+Bu depo `napisen-a7f4a` projesine bağlıdır (`.env.production`, `.env.development`, `.firebaserc`).
+Başka bir Firebase projesi kullanacaksanız bu dosyalardaki değerleri kendi `firebaseConfig` değerlerinizle değiştirin.
+Bu değerler gizli değildir; güvenliği kurallar sağlar.
+
+### 3. Güvenlik kurallarını yükleme
 ```bash
-npm run dev
+npx firebase login
 ```
-Uygulama `http://localhost:3000` adresinde açılır.
+```bash
+npm run deploy:rules
+```
 
-### 2. İki Farklı Kullanıcı Gibi Anında Test Etme:
-1. Birinci tarayıcı sekmesini açın ve `fthtrgl@gmail.com` ile giriş yapın.
-2. İkinci bir gizli sekme veya farklı bir pencere açın ve `mehmetbacar@gmail.com` ile giriş yapın.
-3. Uygulamanın dahili **Mesh Köprüsü (BroadcastChannel)** sayesinde Firebase hesabı bağlamadan bile sekmeler arası canlı, uçtan uca şifreli mesaj, ses kaydı ve fotoğraf gönderimini anında test edebilirsiniz!
+### 4. İzin listesini oluşturma (ilk yönetici)
+Firebase Console → Firestore → **Koleksiyon başlat**:
+* Koleksiyon kimliği: `config`
+* Belge kimliği: `allowlist`
+* Alanlar:
+  * `emails` (array): izin verilecek tüm Gmail adresleri, **küçük harfle**
+  * `admins` (array): listeyi uygulama içinden yönetebilecek adresler (ör. yalnızca siz)
 
----
+Sonraki eklemeleri yönetici olarak uygulamanın **Ayarlar → İzin Listesi** bölümünden yapabilirsiniz.
 
-## ☁️ Google Firebase (Ücretsiz Spark Planı) Kurulumu
-
-Canlı ortamda iki farklı telefon/bilgisayar arasında kullanmak için tamamen ücretsiz Google Firebase hesabınızı 2 dakikada bağlayabilirsiniz:
-
-1. [Google Firebase Console](https://console.firebase.google.com/) adresine gidin ve **"Proje Ekle"** butonuna tıklayın (Adını örneğin `napisen` yapın).
-2. **Firestore Database** sekmesine girip veritabanını oluşturun (Test modunda başlatabilirsiniz).
-3. Firestore Güvenlik Kurallarına (Rules) aşağıdaki kuralı yapıştırın:
-   ```javascript
-   rules_version = '2';
-   service cloud.firestore {
-     match /databases/{database}/documents {
-       match /temp_queue/{messageId} {
-         // Yalnızca geçici iletim için okuma/yazma/silme izni
-         allow read, write, delete: if true;
-       }
-     }
-   }
-   ```
-4. Proje Ayarları -> **"Web Uygulaması Ekle"** (</> simgesi) seçin.
-5. Size verilen `firebaseConfig` bilgilerini uygulamanın sağ üstündeki **Ayarlar ⚙️ -> Google Firebase Bağlantısı** sekmesine yapıştırıp kaydedin.
+### 5. Yayınlama
+```bash
+npm install
+```
+```bash
+npm run deploy
+```
+Firebase Hosting kullanmak istemezseniz `npm run build` ile oluşan `dist/` klasörünü HTTPS destekleyen herhangi bir statik barındırmaya koyabilirsiniz (kamera ve bildirimler için HTTPS zorunludur).
 
 ---
 
-## 📱 Android Cihaza Yükleme (PWA)
+## Kullanım
 
-1. Android telefonunuzda Chrome tarayıcısını açıp uygulamanın adresine gidin.
-2. Sağ üstteki **üç nokta (⋮)** menüsüne tıklayın.
-3. **"Uygulamayı Yükle"** veya **"Ana Ekrana Ekle"** seçeneğine dokunun.
-4. `napisen` telefonunuzun ana ekranına bağımsız bir uygulama simgesi olarak eklenecek, tarayıcı çubuğu olmadan tam ekran açılacaktır.
+1. **İlk giriş:** Google ile giriş yapın. Uygulama bu cihaz için şifreleme anahtarınızı otomatik oluşturur.
+2. **Kişiyi doğrulama (yüz yüze, bir kez):** Sohbeti açın → başlıktaki *Doğrulanmadı* yazısına dokunun.
+   * Bir kişi **Kodum** sekmesindeki QR'ı gösterir, diğeri **Kodu okut** sekmesinden okutur.
+   * Sonra roller değişir. **İki taraf da** okutmalıdır.
+   * Yüz yüze değilseniz **Güvenlik no.** sekmesindeki 60 haneli numarayı telefonda sesli karşılaştırabilirsiniz.
+3. **Yeni telefona geçiş:** Yeni cihazda giriş yapın → *Eski cihazımdan taşı*. Eski cihazda **Ayarlar → Güvenlik → Yeni cihazın kodunu okut** ile ekrandaki QR'ı okutun. Anahtarınız ve doğrulamalarınız şifreli olarak aktarılır; kişilerinizin yeniden doğrulama yapması gerekmez.
+4. **Android'e yükleme (PWA):** Chrome'da açın → ⋮ menü → **Uygulamayı yükle**.
 
+---
+
+## Geliştirme
+
+### Yerel emülatörle (Firebase hesabı gerekmez)
+```bash
+npm run dev:emulators
+```
+Başka bir terminalde izin listesini yazın (ilk adres yönetici olur):
+```bash
+npm run seed:emulator -- siz@gmail.com arkadas@gmail.com
+```
+```bash
+npm run dev:local
+```
+`http://localhost:3000` açılır. Google giriş penceresinde emülatörün sahte hesap ekranı çıkar; izin listesindeki bir adresi yazarak giriş yapın. İki kullanıcıyı denemek için ikinci bir gizli pencere açın. Emülatör arayüzü: `http://localhost:4000`.
+
+### Testler
+```bash
+npm test
+```
+```bash
+npm run test:rules
+```
+* `tests/crypto.test.js`: şifreleme, güvenlik numarası ve cihaz taşıma
+* `tests/rules.test.js`: Firestore güvenlik kuralları (emülatörde çalışır, Java gerektirir)
+
+### Proje yapısı
+```
+firestore.rules            Sunucu tarafı güvenlik kuralları
+src/services/crypto.js     ECDH/HKDF/AES-GCM, güvenlik numarası, QR kodları, cihaz taşıma
+src/services/firebase.js   Google girişi, izin listesi, mesaj kuyruğu, parçalı medya
+src/services/db.js         IndexedDB: anahtar, doğrulanmış kişiler, mesaj geçmişi
+src/hooks/useIdentity.js   Cihaz anahtarı kurulumu ve taşıma
+src/hooks/useMessenger.js  Gönderme/alma, teslim durumu, tekrarları önleme
+public/sw.js               PWA service worker (yalnızca uygulama kabuğunu önbelleğe alır)
+```

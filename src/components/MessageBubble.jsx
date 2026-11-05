@@ -1,8 +1,8 @@
 // napisen - Mesaj Balonu (Metin, Ses ve Görsel Desteği)
 import React, { useState, useEffect, useRef } from 'react';
-import { Play, Pause, Check, CheckCheck, Lock, Download, Mic, FileWarning } from 'lucide-react';
+import { Play, Pause, Check, CheckCheck, Lock, Mic, FileWarning, Clock, AlertCircle, RotateCw, ShieldQuestion } from 'lucide-react';
 
-export default function MessageBubble({ message, onImageClick }) {
+export default function MessageBubble({ message, onImageClick, onRetry }) {
   const isOutgoing = message.isOutgoing;
   const [audioUrl, setAudioUrl] = useState(null);
   const [imageUrl, setImageUrl] = useState(null);
@@ -33,15 +33,18 @@ export default function MessageBubble({ message, onImageClick }) {
       audioRef.current.pause();
       setIsPlaying(false);
     } else {
-      audioRef.current.play();
-      setIsPlaying(true);
+      audioRef.current
+        .play()
+        .then(() => setIsPlaying(true))
+        .catch((err) => console.warn('Ses oynatılamadı:', err));
     }
   };
 
   const handleTimeUpdate = () => {
     if (!audioRef.current) return;
     const current = audioRef.current.currentTime;
-    const duration = audioRef.current.duration || message.duration || 1;
+    const raw = audioRef.current.duration;
+    const duration = Number.isFinite(raw) && raw > 0 ? raw : message.duration || 1;
     setAudioCurrentTime(current);
     setAudioProgress((current / duration) * 100);
   };
@@ -55,7 +58,7 @@ export default function MessageBubble({ message, onImageClick }) {
   const formatTime = (timestamp) => {
     if (!timestamp) return '';
     const date = new Date(timestamp);
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    return date.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
   };
 
   const formatSeconds = (sec) => {
@@ -120,7 +123,7 @@ export default function MessageBubble({ message, onImageClick }) {
               <img
                 src={imageUrl}
                 alt="Şifreli Görsel"
-                onClick={() => onImageClick && onImageClick(imageUrl)}
+                onClick={() => onImageClick && onImageClick(imageUrl, message.mimeType)}
                 className="max-h-72 w-full object-cover rounded-xl cursor-pointer hover:opacity-95 transition"
               />
             ) : (
@@ -129,6 +132,20 @@ export default function MessageBubble({ message, onImageClick }) {
               </div>
             )}
           </div>
+        )}
+
+        {/* ÇÖZÜLEMEYEN MESAJ */}
+        {message.type === 'undecryptable' && (
+          <p className="flex items-start gap-1.5 text-xs italic text-red-200 pr-2">
+            <FileWarning className="h-4 w-4 shrink-0" />
+            <span>{message.text || 'Bu mesaj çözülemedi.'}</span>
+          </p>
+        )}
+
+        {message.unverifiedSender && (
+          <p className="mb-1 flex items-center gap-1 text-[10px] text-amber-300">
+            <ShieldQuestion className="h-3 w-3" /> Doğrulanmamış anahtarla geldi
+          </p>
         )}
 
         {/* DÜZ METİN GÖRÜNÜMÜ */}
@@ -140,22 +157,38 @@ export default function MessageBubble({ message, onImageClick }) {
 
         {/* ALT BİLGİ: SAAT, E2EE KİLİDİ VE TİKLER */}
         <div className="flex items-center justify-end gap-1 text-[10px] text-[#8696a0] mt-0.5 select-none">
-          <Lock className="h-2.5 w-2.5 text-[#00a884]" title="Uçtan Uca Şifreli" />
+          <Lock className="h-2.5 w-2.5 text-[#00a884]" aria-label="Uçtan uca şifreli" />
           <span>{formatTime(message.timestamp)}</span>
 
           {/* Giden mesajlarda iletim durumu (tikler) */}
           {isOutgoing && (
             <span className="ml-0.5">
-              {message.status === 'read' ? (
-                <CheckCheck className="h-3.5 w-3.5 text-[#53bdeb]" title="Okundu" />
-              ) : message.status === 'delivered' ? (
-                <CheckCheck className="h-3.5 w-3.5 text-[#8696a0]" title="Teslim Edildi" />
+              {message.status === 'delivered' ? (
+                <CheckCheck className="h-3.5 w-3.5 text-[#53bdeb]" aria-label="Teslim edildi" />
+              ) : message.status === 'sent' ? (
+                <Check className="h-3.5 w-3.5 text-[#8696a0]" aria-label="Gönderildi" />
+              ) : message.status === 'failed' ? (
+                <AlertCircle className="h-3.5 w-3.5 text-red-400" aria-label="Gönderilemedi" />
               ) : (
-                <Check className="h-3.5 w-3.5 text-[#8696a0]" title="Gönderildi" />
+                <Clock className="h-3 w-3 text-[#8696a0]" aria-label="Gönderiliyor" />
               )}
             </span>
           )}
         </div>
+
+        {isOutgoing && message.status === 'failed' && (
+          <div className="mt-1 flex items-center justify-between gap-2 rounded-md bg-red-950/50 px-2 py-1 text-[10px] text-red-200">
+            <span className="truncate">{message.error || 'Gönderilemedi'}</span>
+            {onRetry && (message.type === 'text' || message.mediaBlob) && (
+              <button
+                onClick={() => onRetry(message)}
+                className="flex shrink-0 items-center gap-1 font-semibold text-red-100 hover:underline cursor-pointer"
+              >
+                <RotateCw className="h-3 w-3" /> Tekrar dene
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

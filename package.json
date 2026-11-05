@@ -1,28 +1,36 @@
 {
   "name": "napisen",
   "version": "1.0.0",
-  "description": "napisen - Uçtan Uca Şifreli Gizli Mesajlaşma",
+  "description": "napisen - Uçtan uca şifreli, yalnızca davetlilere açık mesajlaşma",
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:emulators": "firebase emulators:start --project demo-napisen",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run tests/crypto.test.js",
+    "test:rules": "firebase emulators:exec --only firestore --project demo-napisen \"vitest run tests/rules.test.js\"",
+    "deploy:rules": "firebase deploy --only firestore:rules",
+    "deploy": "npm run build && firebase deploy --only hosting,firestore:rules",
+    "dev:local": "vite --mode emulator",
+    "seed:emulator": "node scripts/seed-emulator.mjs"
   },
   "dependencies": {
-    "clsx": "^2.1.1",
     "firebase": "^13.2.0",
     "idb": "^8.0.4",
+    "jsqr": "^1.4.0",
     "lucide-react": "^1.68.0",
+    "qrcode": "^1.5.4",
     "react": "^19.3.1",
-    "react-dom": "^19.3.1",
-    "tailwind-merge": "^3.7.0"
+    "react-dom": "^19.3.1"
   },
   "devDependencies": {
+    "@firebase/rules-unit-testing": "^6.0.0",
     "@tailwindcss/vite": "^4.3.4",
     "@vitejs/plugin-react": "^6.2.1",
-    "autoprefixer": "^10.6.2",
-    "postcss": "^8.5.32",
+    "firebase-tools": "^15.35.0",
     "tailwindcss": "^4.3.4",
-    "vite": "^8.3.5"
+    "vite": "^8.3.5",
+    "vitest": "^5.1.0"
   }
 }

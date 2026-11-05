@@ -1,29 +1,46 @@
 // napisen - Sol Kenar Çubuğu (Sohbet Listesi & Profil)
 import React, { useState } from 'react';
 import {
-  MessageSquarePlus,
   Settings,
   Search,
   Shield,
   ShieldAlert,
-  UserCheck,
+  ShieldCheck,
+  ShieldQuestion,
   Lock,
   Mic,
   Image as ImageIcon,
+  WifiOff,
 } from 'lucide-react';
+
+function formatListTime(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  const now = new Date();
+  if (d.toDateString() === now.toDateString()) {
+    return d.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
+  }
+  return d.toLocaleDateString('tr-TR', { day: '2-digit', month: '2-digit' });
+}
+
+function KeyBadge({ status }) {
+  if (status === 'verified') return <ShieldCheck className="h-3.5 w-3.5 text-[#00a884] shrink-0" aria-label="Doğrulandı" />;
+  if (status === 'changed') return <ShieldAlert className="h-3.5 w-3.5 text-red-400 shrink-0" aria-label="Anahtar değişti" />;
+  if (status === 'unverified') return <ShieldQuestion className="h-3.5 w-3.5 text-amber-400 shrink-0" aria-label="Doğrulanmadı" />;
+  return null;
+}
 
 export default function Sidebar({
   currentUser,
   contacts,
   activeContact,
+  syncError,
   onSelectContact,
   onOpenSettings,
 }) {
   const [searchQuery, setSearchQuery] = useState('');
 
   const filteredContacts = contacts.filter((c) => {
-    // Kendi hesabını listede gösterme
-    if (c.email.toLowerCase() === currentUser.email.toLowerCase()) return false;
     const q = searchQuery.toLowerCase();
     return c.email.toLowerCase().includes(q) || (c.name && c.name.toLowerCase().includes(q));
   });
@@ -34,12 +51,12 @@ export default function Sidebar({
       <div className="flex h-16 items-center justify-between bg-[#202c33] px-4 py-2.5">
         <div className="flex items-center gap-3">
           <div className="relative flex h-10 w-10 items-center justify-center rounded-full bg-[#00a884] font-bold text-[#111b21] shadow">
-            {currentUser.name ? currentUser.name[0].toUpperCase() : 'N'}
+            {(currentUser.displayName || currentUser.email)[0].toUpperCase()}
             <div className="absolute -bottom-0.5 -right-0.5 h-3.5 w-3.5 rounded-full border-2 border-[#202c33] bg-[#25d366]" />
           </div>
           <div className="flex flex-col truncate">
             <span className="text-sm font-semibold text-[#e9edef] truncate leading-tight">
-              {currentUser.name || currentUser.email.split('@')[0]}
+              {currentUser.displayName || currentUser.email.split('@')[0]}
             </span>
             <span className="flex items-center gap-1 text-[11px] text-[#00a884] font-mono truncate">
               <Lock className="h-2.5 w-2.5" />
@@ -52,7 +69,7 @@ export default function Sidebar({
         <div className="flex items-center gap-1 text-[#aebac1]">
           <button
             onClick={onOpenSettings}
-            title="Ayarlar & Whitelist"
+            title="Ayarlar"
             className="flex h-10 w-10 items-center justify-center rounded-full hover:bg-[#374248] active:bg-[#202c33] transition cursor-pointer"
           >
             <Settings className="h-5 w-5" />
@@ -74,6 +91,13 @@ export default function Sidebar({
         </div>
       </div>
 
+      {syncError && (
+        <div className="flex items-center gap-2 bg-red-950/60 px-4 py-2 text-[11px] text-red-200 border-b border-red-900/60">
+          <WifiOff className="h-3.5 w-3.5 shrink-0" />
+          <span>{syncError}</span>
+        </div>
+      )}
+
       {/* E2EE Bildirim Şeridi */}
       <div className="flex items-center gap-2 bg-[#182229] px-4 py-2 text-[11px] text-[#8696a0] border-b border-[#222d34]">
         <Shield className="h-3.5 w-3.5 text-[#00a884] shrink-0" />
@@ -84,7 +108,9 @@ export default function Sidebar({
       <div className="flex-1 overflow-y-auto divide-y divide-[#222d34]/40">
         {filteredContacts.length === 0 ? (
           <div className="p-6 text-center text-xs text-[#8696a0]">
-            Eşleşen izinli kişi bulunamadı.
+            {contacts.length === 0
+              ? 'İzin listesinde sizden başka kimse yok. Ayarlar → İzin Listesi bölümünden kişi ekleyin.'
+              : 'Eşleşen kişi bulunamadı.'}
           </div>
         ) : (
           filteredContacts.map((contact) => {
@@ -107,11 +133,12 @@ export default function Sidebar({
                 {/* Bilgiler */}
                 <div className="flex flex-1 flex-col truncate">
                   <div className="flex items-center justify-between">
-                    <span className="text-sm font-semibold text-[#e9edef] truncate">
-                      {contact.name || contact.email.split('@')[0]}
+                    <span className="flex items-center gap-1.5 truncate">
+                      <span className="text-sm font-semibold text-[#e9edef] truncate">{contact.name}</span>
+                      <KeyBadge status={contact.keyStatus} />
                     </span>
-                    <span className="text-[11px] text-[#8696a0] font-mono">
-                      {contact.lastMessageTime || ''}
+                    <span className="text-[11px] text-[#8696a0] font-mono shrink-0">
+                      {formatListTime(contact.lastMessageTs)}
                     </span>
                   </div>
 
@@ -129,16 +156,21 @@ export default function Sidebar({
                           <span>Fotoğraf</span>
                         </>
                       )}
-                      {(!contact.lastMessageType || contact.lastMessageType === 'text') && (
+                      {contact.lastMessageType !== 'audio' && contact.lastMessageType !== 'image' && (
                         <span className="truncate">
-                          {contact.lastMessageText || contact.email}
+                          {contact.lastMessageText ||
+                            (contact.keyStatus === 'no-key'
+                              ? 'Henüz giriş yapmadı'
+                              : contact.keyStatus === 'verified'
+                                ? contact.email
+                                : 'QR ile doğrulama bekleniyor')}
                         </span>
                       )}
                     </p>
 
                     {contact.unreadCount > 0 && (
-                      <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[#00a884] text-[11px] font-bold text-[#111b21]">
-                        {contact.unreadCount}
+                      <span className="flex h-5 min-w-5 px-1 items-center justify-center rounded-full bg-[#00a884] text-[11px] font-bold text-[#111b21]">
+                        {contact.unreadCount > 99 ? '99+' : contact.unreadCount}
                       </span>
                     )}
                   </div>

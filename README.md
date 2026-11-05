@@ -35,17 +35,13 @@
 5. **Proje ayarları → Web uygulaması ekle (</>)** ve verilen `firebaseConfig` değerlerini not edin.
 
 ### 2. Ortam değişkenleri
-```bash
-cp .env.example .env.local
-```
-`.env.local` dosyasına `firebaseConfig` değerlerini yazın. Bu değerler gizli değildir; güvenliği kurallar sağlar.
+Bu depo `napisen-a7f4a` projesine bağlıdır (`.env.production`, `.env.development`, `.firebaserc`).
+Başka bir Firebase projesi kullanacaksanız bu dosyalardaki değerleri kendi `firebaseConfig` değerlerinizle değiştirin.
+Bu değerler gizli değildir; güvenliği kurallar sağlar.
 
 ### 3. Güvenlik kurallarını yükleme
 ```bash
 npx firebase login
-```
-```bash
-npx firebase use --add
 ```
 ```bash
 npm run deploy:rules

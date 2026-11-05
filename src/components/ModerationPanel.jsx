@@ -77,6 +77,11 @@ export default function ModerationPanel({ me }) {
               {r.evidence?.length > 0 && (
                 <details>
                   <summary className="cursor-pointer text-[#8696a0]">Delil mesajlar ({r.evidence.length})</summary>
+                  <p className="mt-1 rounded bg-amber-950/40 p-2 text-[10px] leading-relaxed text-amber-200">
+                    Bu mesajlar şikâyet eden kişinin cihazından iletilmiştir. Mesajlar uçtan uca şifreli olduğundan
+                    sunucu bunların gerçekten gönderildiğini doğrulayamaz. Karar verirken diğer şikâyetleri ve
+                    bağlamı da dikkate alın.
+                  </p>
                   <ul className="mt-1 space-y-1">
                     {r.evidence.map((e, i) => (
                       <li key={i} className="rounded bg-[#111b21] p-2 text-[#c5cdd2]">

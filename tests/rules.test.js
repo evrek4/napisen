@@ -17,7 +17,8 @@ import {
   Bytes,
 } from 'firebase/firestore';
 
-const OWNER = 'achartave@gmail.com';
+// İlk admin Firebase Console'dan eklenir; testte kurallar devre dışıyken yazılır
+const OWNER = 'boss@x.com';
 const PUB = (c) => 'B' + c.repeat(87); // 88 karakterlik sahte açık anahtar
 const USERS = {
   'a@x.com': { key: PUB('a'), code: 'AAAA-2222', discoverable: false },
@@ -87,6 +88,7 @@ beforeEach(async () => {
         updatedAt: new Date(),
       });
     }
+    await setDoc(doc(db, `roles/${OWNER}`), { role: 'admin', grantedBy: 'console', grantedAt: new Date() });
     await setDoc(doc(db, 'roles/mod@x.com'), { role: 'moderator', grantedBy: OWNER, grantedAt: new Date() });
     await setDoc(doc(db, 'messages/m1'), { ...message('a@x.com', 'b@x.com'), createdAt: new Date() });
     await setDoc(doc(db, 'reports/r1'), {
@@ -158,14 +160,28 @@ describe('Gizlilik: listeleme ve bulma', () => {
 });
 
 describe('Roller', () => {
-  it('yalnızca admin moderatör atar ve kaldırır', async () => {
-    const role = { role: 'moderator', grantedBy: OWNER, grantedAt: serverTimestamp() };
-    await assertSucceeds(setDoc(doc(ctx(OWNER), 'roles/b@x.com'), role));
+  const role = (r, by) => ({ role: r, grantedBy: by, grantedAt: serverTimestamp() });
+
+  it('kimse kendini admin veya moderatör yapamaz', async () => {
+    await assertFails(setDoc(doc(ctx('a@x.com'), 'roles/a@x.com'), role('admin', 'a@x.com')));
+    await assertFails(setDoc(doc(ctx('a@x.com'), 'roles/a@x.com'), role('moderator', 'a@x.com')));
+    await assertFails(setDoc(doc(ctx('mod@x.com'), 'roles/mod@x.com'), role('admin', 'mod@x.com')));
+  });
+
+  it('admin, moderatör ve admin atar/kaldırır; moderatör atayamaz', async () => {
+    await assertSucceeds(setDoc(doc(ctx(OWNER), 'roles/b@x.com'), role('moderator', OWNER)));
+    await assertSucceeds(setDoc(doc(ctx(OWNER), 'roles/c@x.com'), role('admin', OWNER)));
     await assertSucceeds(getDocs(collection(ctx(OWNER), 'roles')));
-    await assertFails(setDoc(doc(ctx('mod@x.com'), 'roles/c@x.com'), { ...role, grantedBy: 'mod@x.com' }));
-    await assertFails(setDoc(doc(ctx('a@x.com'), 'roles/a@x.com'), { ...role, grantedBy: 'a@x.com' }));
-    await assertFails(setDoc(doc(ctx(OWNER), 'roles/c@x.com'), { ...role, role: 'admin' }));
+    await assertFails(setDoc(doc(ctx('mod@x.com'), 'roles/a@x.com'), role('moderator', 'mod@x.com')));
+    await assertFails(setDoc(doc(ctx(OWNER), 'roles/a@x.com'), role('superadmin', OWNER)));
     await assertSucceeds(deleteDoc(doc(ctx(OWNER), 'roles/b@x.com')));
+    // Yeni atanan admin de yetki verebilir
+    await assertSucceeds(setDoc(doc(ctx('c@x.com'), 'roles/a@x.com'), role('moderator', 'c@x.com')));
+  });
+
+  it('admin kendi rolünü değiştiremez veya silemez (kilitlenmeyi önler)', async () => {
+    await assertFails(setDoc(doc(ctx(OWNER), `roles/${OWNER}`), role('moderator', OWNER)));
+    await assertFails(deleteDoc(doc(ctx(OWNER), `roles/${OWNER}`)));
   });
 
   it('kullanıcı kendi rolünü okuyabilir, başkasınınkini okuyamaz', async () => {
@@ -187,9 +203,13 @@ describe('Askıya alma', () => {
     await assertFails(setDoc(doc(ctx('a@x.com'), 'messages/m10'), message('a@x.com', 'c@x.com')));
   });
 
-  it('normal kullanıcı askıya alamaz; moderatör admini ve diğer moderatörü askıya alamaz', async () => {
+  it('normal kullanıcı askıya alamaz; kimse admini askıya alamaz; moderatörü yalnızca admin alır', async () => {
     await assertFails(setDoc(doc(ctx('a@x.com'), 'bans/c@x.com'), ban('a@x.com')));
     await assertFails(setDoc(doc(ctx('mod@x.com'), `bans/${OWNER}`), ban('mod@x.com')));
+    await env.withSecurityRulesDisabled((c) =>
+      setDoc(doc(c.firestore(), 'roles/adm2@x.com'), { role: 'admin', grantedBy: OWNER, grantedAt: new Date() })
+    );
+    await assertFails(setDoc(doc(ctx(OWNER), 'bans/adm2@x.com'), ban(OWNER)));
     await env.withSecurityRulesDisabled((c) =>
       setDoc(doc(c.firestore(), 'roles/mod2@x.com'), { role: 'moderator', grantedBy: OWNER, grantedAt: new Date() })
     );
@@ -316,6 +336,22 @@ describe('Mesajlar', () => {
     await assertFails(setDoc(doc(ctx('c@x.com'), 'messages/m8/chunks/1'), chunk));
     await assertSucceeds(getDoc(doc(ctx('b@x.com'), 'messages/m8/chunks/0')));
     await assertFails(getDoc(doc(ctx('c@x.com'), 'messages/m8/chunks/0')));
+  });
+});
+
+describe('Yazıyor göstergesi', () => {
+  const t = () => ({ at: serverTimestamp() });
+  it('gönderen yazar, yalnızca alıcı okur', async () => {
+    await assertSucceeds(setDoc(doc(ctx('a@x.com'), 'typing/b@x.com/from/a@x.com'), t()));
+    await assertSucceeds(getDocs(collection(ctx('b@x.com'), 'typing/b@x.com/from')));
+    await assertFails(getDocs(collection(ctx('c@x.com'), 'typing/b@x.com/from')));
+    await assertFails(getDoc(doc(ctx('a@x.com'), 'typing/b@x.com/from/a@x.com')));
+  });
+  it('başkası adına yazılamaz; engellenen kişi ve kayıtsız alıcı için yazılamaz', async () => {
+    await assertFails(setDoc(doc(ctx('c@x.com'), 'typing/b@x.com/from/a@x.com'), t()));
+    await assertFails(setDoc(doc(ctx('a@x.com'), 'typing/yok@x.com/from/a@x.com'), t()));
+    await assertSucceeds(setDoc(doc(ctx('b@x.com'), 'blocks/b@x.com/list/a@x.com'), { at: serverTimestamp() }));
+    await assertFails(setDoc(doc(ctx('a@x.com'), 'typing/b@x.com/from/a@x.com'), t()));
   });
 });
 

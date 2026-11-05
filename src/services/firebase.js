@@ -98,13 +98,13 @@ export function logout() {
 
 // ---------- Hesap durumu: rol ve askı ----------
 // { role: 'admin' | 'moderator' | 'user', ban: { reason } | null }
-export async function fetchAccountStatus(email, ownerEmail) {
+export async function fetchAccountStatus(email) {
   const [banSnap, roleSnap] = await Promise.all([
     getDoc(doc(db, 'bans', email)),
     getDoc(doc(db, 'roles', email)),
   ]);
-  const role =
-    email === ownerEmail ? 'admin' : roleSnap.exists() && roleSnap.data().role === 'moderator' ? 'moderator' : 'user';
+  const stored = roleSnap.exists() ? roleSnap.data().role : null;
+  const role = stored === 'admin' || stored === 'moderator' ? stored : 'user';
   return { role, ban: banSnap.exists() ? banSnap.data() : null };
 }
 
@@ -117,8 +117,9 @@ export function subscribeRoles(callback, onError) {
   );
 }
 
-export function grantModerator(email, grantedBy) {
-  return setDoc(doc(db, 'roles', email), { role: 'moderator', grantedBy, grantedAt: serverTimestamp() });
+// role: 'moderator' | 'admin'
+export function grantRole(email, role, grantedBy) {
+  return setDoc(doc(db, 'roles', email), { role, grantedBy, grantedAt: serverTimestamp() });
 }
 
 export function revokeRole(email) {
@@ -198,6 +199,26 @@ export function resolveReport(id, status, resolution, by) {
 // Sunucudaki profil, kişi kodu, taşıma paketi ve bekleyen tüm mesajlar silinir; ardından Google oturumu
 // Firebase'den kaldırılır. Son giriş eskiyse Google tekrar giriş ister.
 export async function deleteAccount(email, code) {
+  const user = auth.currentUser;
+  if (!user) throw new Error('Oturum bulunamadı.');
+
+  // Google, hesap silmek için yakın zamanda giriş yapılmış olmasını ister. Yeniden girişi EN BAŞTA
+  // isteriz: böylece veriler silinip hesap silinemediği yarım bir durum oluşmaz.
+  const lastSignIn = Date.parse(user.metadata?.lastSignInTime || '') || 0;
+  if (Date.now() - lastSignIn > 4 * 60 * 1000) {
+    try {
+      await reauthenticateWithPopup(user, new GoogleAuthProvider());
+    } catch (err) {
+      if (err?.code === 'auth/popup-blocked') {
+        throw new Error('Tarayıcı Google doğrulama penceresini engelledi. Açılır pencerelere izin verip tekrar deneyin.');
+      }
+      if (err?.code === 'auth/popup-closed-by-user' || err?.code === 'auth/cancelled-popup-request') {
+        throw new Error('Hesap silme iptal edildi.');
+      }
+      throw err;
+    }
+  }
+
   for (const field of ['to', 'from']) {
     const snap = await getDocs(query(collection(db, 'messages'), where(field, '==', email)));
     for (const d of snap.docs) {
@@ -207,17 +228,9 @@ export async function deleteAccount(email, code) {
   await deleteDoc(doc(db, 'transfers', email)).catch(() => {});
   await deleteDoc(doc(db, 'users', email)).catch(() => {});
   if (code) await deleteDoc(doc(db, 'codes', code)).catch(() => {});
-
-  const user = auth.currentUser;
-  if (!user) return;
-  try {
-    await deleteUser(user);
-  } catch (err) {
-    if (err?.code !== 'auth/requires-recent-login') throw err;
-    await reauthenticateWithPopup(user, new GoogleAuthProvider());
-    await deleteUser(user);
-  }
+  await deleteUser(user);
 }
+
 
 // ---------- Kişi kodları ve profiller ----------
 // codes/{KOD}: kodu bilen herkesin okuyabildiği açık profil (ad + açık anahtar)
@@ -325,9 +338,10 @@ export function subscribeCode(code, callback) {
 // Firestore belge sınırı 1 MiB; medya 512 KB'lık şifreli parçalara bölünür.
 export const CHUNK_SIZE = 512 * 1024;
 
-export async function uploadMessage(id, message, mediaBytes) {
+export async function uploadMessage(id, message, mediaBytes, onProgress) {
   const chunks = mediaBytes ? Math.ceil(mediaBytes.length / CHUNK_SIZE) : 0;
   for (let i = 0; i < chunks; i++) {
+    onProgress?.(i / chunks);
     const part = mediaBytes.subarray(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
     await setDoc(doc(db, 'messages', id, 'chunks', String(i)), {
       from: message.from,
@@ -348,7 +362,7 @@ export async function downloadMediaBytes(id, chunks) {
   const parts = await Promise.all(
     Array.from({ length: chunks }, (_, i) =>
       getDoc(doc(db, 'messages', id, 'chunks', String(i))).then((s) => {
-        if (!s.exists()) throw new Error('Medya parçası eksik.');
+        if (!s.exists()) throw Object.assign(new Error('Medya parçası eksik.'), { code: 'media-missing' });
         return s.data().data.toUint8Array();
       })
     )
@@ -388,6 +402,28 @@ export function subscribeMessages(field, email, onChange, onError) {
       console.error(`Mesaj dinleme hatası (${field}):`, err);
       onError?.(err);
     }
+  );
+}
+
+// ---------- "Yazıyor..." göstergesi ----------
+export function setTyping(to, from) {
+  return setDoc(doc(db, 'typing', to, 'from', from), { at: serverTimestamp() });
+}
+
+export function clearTyping(to, from) {
+  return deleteDoc(doc(db, 'typing', to, 'from', from));
+}
+
+// callback(gönderen e-postası, yazıyor mu)
+export function subscribeTyping(me, callback) {
+  return onSnapshot(
+    collection(db, 'typing', me, 'from'),
+    (snap) => {
+      for (const change of snap.docChanges()) {
+        callback(change.doc.id, change.type !== 'removed');
+      }
+    },
+    (err) => console.warn('Yazıyor bilgisi dinlenemedi:', err?.code)
   );
 }
 

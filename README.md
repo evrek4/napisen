@@ -10,7 +10,7 @@
 |---|---|
 | **Giriş** | Google hesabı ile (Firebase Authentication). Google hesabınızda iki adımlı doğrulama açıksa o da devrededir. |
 | **Üyelik** | Herkes Google hesabıyla üye olabilir. Kayıtta Kullanım Koşulları, Gizlilik Politikası/KVKK Aydınlatma Metni ve yaş (13+) onayı zorunludur; onay tarihi ve sürümü sunucuda saklanır. |
-| **Roller** | `achartave@gmail.com` admindir (`firestore.rules` → `owner()`). Admin, **Ayarlar → Yetkiler** bölümünden istediği kişiye moderatör yetkisi verir. Moderatörler şikâyetleri inceler ve hesapları askıya alabilir; mesaj içeriklerini göremezler. |
+| **Roller** | Veritabanında `roles/{email}` belgelerinde tutulur (`admin` veya `moderator`); kodda e-posta yoktur. İlk admin Firebase Console'dan bir kez eklenir; sonrasında adminler **Ayarlar → Yetkiler** bölümünden admin ve moderatör atar. Kimse kendini yetkilendiremez, admin kendi rolünü kaldıramaz, admin askıya alınamaz. Moderatörler şikâyetleri inceler ve hesapları askıya alabilir; mesaj içeriklerini göremezler. |
 | **Engelleme ve şikâyet** | Sohbet menüsünden kişi engellenir (sunucu engellenen kişinin mesajını reddeder) veya şikâyet edilir. Şikâyet eden isterse karşı taraftan gelen son 10 mesajı delil olarak ekler. |
 | **Kişi bulma** | Kullanıcılar birbirini listeleyemez. Herkesin 8 karakterlik bir **kişi kodu** vardır (ör. `7K3Q-9XW2`); kodu bilen kişi size yazabilir. Kod istendiğinde yenilenebilir. **E-postayla bulunmak isteğe bağlıdır** (varsayılan: kapalı); kapalıyken bir adresin kayıtlı olup olmadığı bile anlaşılamaz. |
 | **Şifreleme** | Her cihaz kendi **ECDH P-256** anahtar çiftini üretir. Sohbet anahtarı `ECDH → HKDF-SHA256 → AES-GCM-256` ile türetilir. Özel anahtar cihazdan çıkmaz. Sunucu yalnızca şifreli veriyi görür. |
@@ -18,6 +18,9 @@
 | **Sunucu kuralları** | Kimse başkası adına mesaj yazamaz, başkasının mesajını okuyamaz veya başkasının açık anahtarını değiştiremez. Kurallar `tests/rules.test.js` ile test edilir. |
 
 ### Gizlilik seçenekleri
+* **Yeni mesaj bildirimleri** (varsayılan: açık): Uygulama açıkken ekranda uyarı, arka plandayken sistem bildirimi (mesaj içeriği gösterilmez). Bildirim sesi ayrıca kapatılabilir.
+* **"Yazıyor..." bilgisini gönder** (varsayılan: açık): Karşı taraf yazarken sohbet başlığında ve listede "yazıyor..." görünür. Bu bilgi şifreli değildir; yalnızca alıcı okuyabilir.
+* **Mesajlarım kopyalanabilir ve iletilebilir** (varsayılan: açık): Kapatılınca gönderilen mesajlar karşı tarafta kopyalanamaz, iletilemez, fotoğraflar indirilemez. Mesaj kutusunun yanındaki düğmeyle de açılıp kapatılır. Bu bilgi şifreli mesaj başlığında taşınır. Ekran görüntüsünü engellemez.
 * **E-posta adresimle bulunabilirim** (varsayılan: kapalı): Açıkken e-postanızı bilen izinli kullanıcılar da sizi bulabilir.
 * **Sunucuda Sakla** (varsayılan: kapalı): Kapalıyken mesaj teslim edildiği an sunucudan silinir. Açıkken şifreli kopya sunucuda kalır; yeni cihaza taşındığınızda geçmiş geri yüklenir.
 * **Hayalet Mod** (varsayılan: kapalı): Açıkken mesajlar cihaz hafızasına yazılmaz, sayfa kapanınca kaybolur.
@@ -58,8 +61,13 @@ npx firebase login
 npm run deploy:rules
 ```
 
-### 4. Admin
-Konsolda belge oluşturmanız **gerekmez**. Admin adresi iki yerde tanımlıdır ve aynı olmalıdır: `firestore.rules` → `owner()` ve `src/config/app.js` → `OWNER_EMAIL` (şu an `achartave@gmail.com`).
+### 4. İlk admini ekleme (bir kez)
+Firebase Console → Firestore → **Data** → **+ Koleksiyon başlat**:
+* Koleksiyon kimliği: `roles`
+* Belge kimliği: admin olacak Gmail adresi, **küçük harfle ve sonunda boşluk olmadan** (ör. `ornek@gmail.com`)
+* Alan: `role` (string) = `admin`
+
+Kaydettikten sonra belgeyi açıp adres çubuğunun `...~2Froles~2Fornek@gmail.com` ile bittiğini (sonunda `%20` olmadığını) kontrol edin. Diğer admin ve moderatörleri uygulama içinden ekleyebilirsiniz.
 
 ### 5. Yayınlama
 ```bash
@@ -94,7 +102,7 @@ Başka bir terminalde:
 ```bash
 npm run dev:local
 ```
-`http://localhost:3000` açılır. Google giriş penceresinde emülatörün sahte hesap ekranı çıkar; herhangi bir adresle giriş yapın (admin olarak denemek için `achartave@gmail.com`). İki kullanıcıyı denemek için ikinci bir gizli pencere açın. Emülatör arayüzü: `http://localhost:4000`.
+`http://localhost:3000` açılır. Google giriş penceresinde emülatörün sahte hesap ekranı çıkar; herhangi bir adresle giriş yapın. Admin denemek için emülatör arayüzünden (`http://localhost:4000` → Firestore) `roles/{adres}` belgesine `role: "admin"` ekleyin. İki kullanıcıyı denemek için ikinci bir gizli pencere açın. Emülatör arayüzü: `http://localhost:4000`.
 
 ### Testler
 ```bash

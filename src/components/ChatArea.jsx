@@ -30,18 +30,36 @@ export default function ChatArea({
   onBlock,
   onUnblock,
   onReport,
+  onTyping,
   onSendText,
   onSendAudio,
   onSendImage,
   onRetry,
   onImageClick,
+  onCopyMessage,
+  onForwardMessage,
   onError,
 }) {
   const messagesEndRef = useRef(null);
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  const scrollRef = useRef(null);
+  const nearBottomRef = useRef(true);
+
+  const scrollToBottom = (smooth = true) => {
+    messagesEndRef.current?.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto', block: 'end' });
   };
+
+  // Kullanıcı en alttaysa: görsel yüklenince veya klavye açılıp ekran daralınca en altta kal
+  const keepAtBottom = () => {
+    if (nearBottomRef.current) scrollToBottom(false);
+  };
+
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return undefined;
+    vv.addEventListener('resize', keepAtBottom);
+    return () => vv.removeEventListener('resize', keepAtBottom);
+  }, []);
 
   useEffect(() => {
     scrollToBottom();
@@ -81,7 +99,7 @@ export default function ChatArea({
   const canSend = canMessage(keyStatus) && !isBlocked;
 
   return (
-    <div className="flex flex-1 flex-col h-full bg-[#0b141a] overflow-hidden select-none">
+    <div className="flex flex-1 flex-col h-full bg-[#0b141a] overflow-hidden">
       {/* ÜST SOHBET BAŞLIĞI */}
       <div className="flex h-16 items-center justify-between bg-[#202c33] px-3 md:px-4 py-2 border-b border-[#222d34] shrink-0">
         <div className="flex min-w-0 items-center gap-3">
@@ -118,7 +136,9 @@ export default function ChatArea({
                 <Lock className="h-3 w-3 shrink-0" />
               )}
               <span className="truncate">
-                {keyStatus === 'verified'
+                {activeContact.typing ? (
+                  <span className="text-[#00a884]">yazıyor...</span>
+                ) : keyStatus === 'verified'
                   ? 'Doğrulandı'
                   : keyStatus === 'changed'
                     ? 'Anahtar değişti!'
@@ -175,6 +195,11 @@ export default function ChatArea({
 
       {/* MESAJ AKIŞI ALANI */}
       <div
+        ref={scrollRef}
+        onScroll={(e) => {
+          const el = e.currentTarget;
+          nearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+        }}
         className="flex-1 overflow-y-auto p-2 md:p-4 space-y-2"
         style={{
           backgroundImage: `radial-gradient(circle at center, #111b21 0%, #0b141a 100%)`,
@@ -256,7 +281,15 @@ export default function ChatArea({
 
         {/* MESAJ LİSTESİ */}
         {messages.map((msg) => (
-          <MessageBubble key={msg.id} message={msg} onImageClick={onImageClick} onRetry={onRetry} />
+          <MessageBubble
+            key={msg.id}
+            message={msg}
+            onImageClick={onImageClick}
+            onRetry={onRetry}
+            onMediaLoad={keepAtBottom}
+            onCopy={onCopyMessage}
+            onForward={onForwardMessage}
+          />
         ))}
 
         <div ref={messagesEndRef} />
@@ -274,6 +307,9 @@ export default function ChatArea({
             : 'Bu kişi henüz uygulamaya giriş yapmadı'
         }
         onError={onError}
+        onTyping={onTyping}
+        protectOn={preferences.allowCopy === false}
+        onToggleProtect={() => onTogglePreference('allowCopy')}
         onSendText={onSendText}
         onSendAudio={onSendAudio}
         onSendImage={onSendImage}

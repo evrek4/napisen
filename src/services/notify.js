@@ -1,4 +1,6 @@
-// napisen - Bildirimler (uygulama açıkken / arka plandaki sekmede)
+// napisen - Bildirimler
+// - Uygulama arka plandaysa: sistem bildirimi (mesaj içeriği gösterilmez)
+// - Uygulama açıksa ama başka sohbetteyse: uygulama içi uyarı + ses (MessengerApp gösterir)
 // Not: Uygulama tamamen kapalıyken bildirim için FCM + sunucu gerekir; bu sürümde yoktur.
 
 export function notificationsSupported() {
@@ -11,12 +13,15 @@ export function notificationPermission() {
 
 export async function requestNotificationPermission() {
   if (!notificationsSupported()) return 'unsupported';
-  return Notification.requestPermission();
+  try {
+    return await Notification.requestPermission();
+  } catch {
+    return Notification.permission;
+  }
 }
 
-// İçerik gizliliği için mesaj metni bildirimde gösterilmez
-export async function showMessageNotification(senderName) {
-  if (notificationPermission() !== 'granted' || !document.hidden) return;
+export async function showSystemNotification(senderName) {
+  if (notificationPermission() !== 'granted') return;
   const title = 'napisen';
   const options = {
     body: `${senderName} size yeni bir mesaj gönderdi`,
@@ -27,12 +32,34 @@ export async function showMessageNotification(senderName) {
   };
   try {
     const reg = await navigator.serviceWorker?.getRegistration();
-    if (reg) {
-      await reg.showNotification(title, options);
-    } else {
-      new Notification(title, options);
-    }
+    if (reg) await reg.showNotification(title, options);
+    else new Notification(title, options);
   } catch (err) {
     console.warn('Bildirim gösterilemedi:', err);
+  }
+}
+
+// Kısa, yumuşak bir "dıt" sesi (ses dosyası gerektirmez)
+let audioCtx = null;
+export function playMessageSound() {
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    const now = audioCtx.currentTime;
+    [880, 1320].forEach((freq, i) => {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+      const t = now + i * 0.12;
+      gain.gain.setValueAtTime(0.0001, t);
+      gain.gain.exponentialRampToValueAtTime(0.15, t + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.18);
+      osc.connect(gain).connect(audioCtx.destination);
+      osc.start(t);
+      osc.stop(t + 0.2);
+    });
+  } catch {
+    /* ses çalınamadı */
   }
 }

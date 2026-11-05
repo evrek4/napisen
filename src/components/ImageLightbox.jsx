@@ -1,10 +1,19 @@
 // napisen - Tam Ekran Görsel İnceleyici (Lightbox)
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { X, Download, Shield } from 'lucide-react';
 
 const EXT = { 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp', 'image/svg+xml': 'svg' };
 
-export default function ImageLightbox({ imageUrl, mimeType, onClose }) {
+// Görselin kendi Blob URL'sini üretir: sohbet güncellense veya kapansa bile görüntü bozulmaz
+export default function ImageLightbox({ blob, mimeType, protect, onClose }) {
+  const [imageUrl, setImageUrl] = useState(null);
+  useEffect(() => {
+    if (!blob) return undefined;
+    const url = URL.createObjectURL(blob);
+    setImageUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [blob]);
+
   useEffect(() => {
     const onKey = (e) => e.key === 'Escape' && onClose();
     window.addEventListener('keydown', onKey);
@@ -19,10 +28,11 @@ export default function ImageLightbox({ imageUrl, mimeType, onClose }) {
       <div className="absolute top-4 left-4 right-4 flex items-center justify-between text-white/80">
         <div className="flex items-center gap-2 text-xs text-[#00a884]">
           <Shield className="h-4 w-4" />
-          <span>Uçtan uca şifreli medya</span>
+          <span>{protect ? 'Gönderen kaydetmeye izin vermiyor' : 'Uçtan uca şifreli medya'}</span>
         </div>
 
         <div className="flex items-center gap-3">
+          {!protect && (
           <a
             href={imageUrl}
             download={`napisen_${Date.now()}.${EXT[mimeType] || 'jpg'}`}
@@ -31,6 +41,7 @@ export default function ImageLightbox({ imageUrl, mimeType, onClose }) {
           >
             <Download className="h-5 w-5" />
           </a>
+          )}
           <button
             onClick={onClose}
             className="flex h-9 w-9 items-center justify-center rounded-full bg-white/10 hover:bg-white/20 transition text-white cursor-pointer"
@@ -44,6 +55,8 @@ export default function ImageLightbox({ imageUrl, mimeType, onClose }) {
       {/* Görsel */}
       <img
         src={imageUrl}
+        draggable={!protect}
+        onContextMenu={protect ? (e) => e.preventDefault() : undefined}
         alt="Büyük Görünüm"
         className="max-h-[85vh] max-w-[90vw] object-contain rounded-lg shadow-2xl"
       />

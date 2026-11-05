@@ -1,8 +1,5 @@
 // napisen - Uygulama geneli sabitler
 
-// Uygulama sahibi (admin). firestore.rules içindeki owner() ile AYNI olmalıdır.
-export const OWNER_EMAIL = 'achartave@gmail.com';
-
 // Kullanım Koşulları / Gizlilik metinleri değiştiğinde bu sürümü güncelleyin:
 // kullanıcılardan bir sonraki girişte yeniden onay istenir.
 export const TERMS_VERSION = '2026-11-05';

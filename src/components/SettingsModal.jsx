@@ -16,10 +16,13 @@ import {
   Smartphone,
   KeyRound,
   Crown,
+  AtSign,
+  RefreshCw,
 } from 'lucide-react';
 import QrScanner from './QrScanner';
+import MyCodeCard from './MyCodeCard';
 import { getStorageStats, clearMessageHistory } from '../services/db';
-import { addAllowedEmail, removeAllowedEmail } from '../services/firebase';
+import { addAllowedEmail, removeAllowedEmail, subscribeAllowlist } from '../services/firebase';
 import { publicKeyFingerprint, normalizeEmail } from '../services/crypto';
 import {
   notificationPermission,
@@ -53,7 +56,11 @@ function Toggle({ on, onClick, label }) {
 export default function SettingsModal({
   me,
   identity,
-  allowlist,
+  myCode,
+  discoverable,
+  onSetDiscoverable,
+  onRegenerateCode,
+  isAdmin,
   contacts,
   preferences,
   onTogglePreference,
@@ -73,7 +80,31 @@ export default function SettingsModal({
   const [transferMsg, setTransferMsg] = useState({ type: '', text: '' });
   const [transferBusy, setTransferBusy] = useState(false);
 
-  const isAdmin = allowlist.admins.includes(me.email);
+  const [allowlist, setAllowlist] = useState([]);
+  const [profileMsg, setProfileMsg] = useState('');
+  const [profileBusy, setProfileBusy] = useState(false);
+
+  const runProfile = async (fn, okText) => {
+    if (profileBusy) return;
+    setProfileBusy(true);
+    setProfileMsg('');
+    try {
+      await fn();
+      if (okText) setProfileMsg(okText);
+    } catch (err) {
+      setProfileMsg('İşlem başarısız: ' + (err.message || err));
+    } finally {
+      setProfileBusy(false);
+    }
+  };
+
+  // Tüm liste yalnızca yöneticiye gösterilir (sunucu kuralı da bunu zorunlu kılar)
+  useEffect(() => {
+    if (!isAdmin) return undefined;
+    return subscribeAllowlist(setAllowlist, (err) =>
+      setListMsg(err?.code === 'permission-denied' ? 'Listeyi görme yetkiniz yok.' : 'Liste yüklenemedi.')
+    );
+  }, [isAdmin]);
 
   useEffect(() => {
     getStorageStats().then(setStorageStats);
@@ -93,12 +124,12 @@ export default function SettingsModal({
       setListMsg('Geçerli bir e-posta adresi yazın.');
       return;
     }
-    if (allowlist.emails.includes(clean)) {
+    if (allowlist.some((e) => e.email === clean)) {
       setListMsg('Bu e-posta zaten listede.');
       return;
     }
     try {
-      await addAllowedEmail(clean);
+      await addAllowedEmail(clean, me.email);
       setNewEmail('');
       setListMsg(`✓ ${clean} eklendi. Artık Google hesabıyla giriş yapabilir.`);
     } catch (err) {
@@ -108,7 +139,7 @@ export default function SettingsModal({
 
   const handleRemoveEmail = async (email) => {
     if (email === me.email) return;
-    if (!window.confirm(`${email} izin listesinden çıkarılsın mı? Bu kişi artık sunucuya erişemez.`)) return;
+    if (!window.confirm(`${email} izin listesinden çıkarılsın mı? Bu kişi artık uygulamaya giremez.`)) return;
     try {
       await removeAllowedEmail(email);
       setListMsg(`${email} çıkarıldı.`);
@@ -144,7 +175,7 @@ export default function SettingsModal({
   const tabs = [
     ['privacy', 'Gizlilik'],
     ['security', 'Güvenlik'],
-    ['allowlist', 'İzin Listesi'],
+    ...(isAdmin ? [['allowlist', 'İzin Listesi']] : []),
     ['storage', 'Hafıza'],
   ];
 
@@ -176,6 +207,26 @@ export default function SettingsModal({
           {/* ---------- GİZLİLİK ---------- */}
           {activeTab === 'privacy' && (
             <>
+              <div className="rounded-xl bg-[#182229] p-4 border border-[#2a3942] flex items-start justify-between gap-4">
+                <div className="flex gap-3">
+                  <AtSign className="h-5 w-5 text-[#00a884] shrink-0 mt-0.5" />
+                  <div>
+                    <h4 className="text-sm font-semibold">E-posta adresimle bulunabilirim</h4>
+                    <p className="mt-1 text-xs leading-relaxed text-[#8696a0]">
+                      <strong>Kapalı (önerilen):</strong> Sizi yalnızca kişi kodunuzu bilenler bulabilir.
+                      <br />
+                      <strong>Açık:</strong> E-posta adresinizi bilen izinli kullanıcılar da size yazabilir.
+                    </p>
+                  </div>
+                </div>
+                <Toggle
+                  on={discoverable}
+                  onClick={() => runProfile(() => onSetDiscoverable(!discoverable))}
+                  label="E-postayla bulunabilirim"
+                />
+              </div>
+              {profileMsg && activeTab === 'privacy' && <p className="text-xs text-[#00a884]">{profileMsg}</p>}
+
               <div className="rounded-xl bg-[#182229] p-4 border border-[#2a3942] flex items-start justify-between gap-4">
                 <div className="flex gap-3">
                   <Server className="h-5 w-5 text-[#53bdeb] shrink-0 mt-0.5" />
@@ -246,6 +297,24 @@ export default function SettingsModal({
           {/* ---------- GÜVENLİK ---------- */}
           {activeTab === 'security' && (
             <>
+              <MyCodeCard code={myCode} />
+              <button
+                disabled={profileBusy}
+                onClick={() => {
+                  if (
+                    window.confirm(
+                      'Yeni bir kişi kodu alınsın mı?\n\nEski kodunuz çalışmaz olur; onu bilen yeni kişiler sizi bulamaz. Mevcut sohbetleriniz devam eder (karşı taraf, siz ona yeniden yazınca yeni kodunuzu öğrenir).'
+                    )
+                  ) {
+                    runProfile(onRegenerateCode, '✓ Yeni kişi kodunuz oluşturuldu.');
+                  }
+                }}
+                className="flex w-full items-center justify-center gap-1.5 text-xs text-[#8696a0] hover:text-[#e9edef] disabled:opacity-50 cursor-pointer"
+              >
+                <RefreshCw className={`h-3.5 w-3.5 ${profileBusy ? 'animate-spin' : ''}`} /> Kodumu yenile
+              </button>
+              {profileMsg && <p className="text-center text-xs text-[#00a884]">{profileMsg}</p>}
+
               <div className="rounded-xl bg-[#182229] p-4 border border-[#2a3942]">
                 <div className="flex items-center gap-2 text-sm font-semibold">
                   <KeyRound className="h-4 w-4 text-[#00a884]" /> Bu cihazın anahtar parmak izi
@@ -269,7 +338,7 @@ export default function SettingsModal({
                     >
                       <span className="truncate text-xs">
                         <span className="block text-[#e9edef]">{c.name}</span>
-                        <span className="block text-[#8696a0]">{c.email}</span>
+                        <span className="block font-mono text-[#8696a0]">{c.code || ''}</span>
                       </span>
                       <span className="flex shrink-0 items-center gap-1 text-[11px]">
                         {c.keyStatus === 'verified' && (
@@ -330,14 +399,14 @@ export default function SettingsModal({
           )}
 
           {/* ---------- İZİN LİSTESİ ---------- */}
-          {activeTab === 'allowlist' && (
+          {activeTab === 'allowlist' && isAdmin && (
             <>
               <p className="text-xs leading-relaxed text-[#8696a0]">
-                Liste sunucuda tutulur ve güvenlik kurallarıyla korunur. Yalnızca listedeki Google hesapları giriş
-                yapabilir. {isAdmin ? 'Yönetici olarak liste üzerinde değişiklik yapabilirsiniz.' : 'Listeyi yalnızca yöneticiler değiştirebilir.'}
+                Yalnızca bu listedeki Google hesapları uygulamaya girebilir. Liste yalnızca yöneticilere görünür;
+                diğer kullanıcılar kimin kayıtlı olduğunu göremez ve yalnızca e-postasını bildikleri kişiye yazabilir.
               </p>
 
-              {isAdmin && (
+              {(
                 <form onSubmit={handleAddEmail} className="flex gap-2">
                   <input
                     type="email"
@@ -354,14 +423,15 @@ export default function SettingsModal({
               {listMsg && <p className="text-xs text-[#00a884]">{listMsg}</p>}
 
               <div className="divide-y divide-[#222d34] rounded-xl border border-[#2a3942] bg-[#182229]">
-                {allowlist.emails.map((email) => (
+                {allowlist.length === 0 && <p className="p-3 text-xs text-[#8696a0]">Yükleniyor...</p>}
+                {allowlist.map(({ email, admin }) => (
                   <div key={email} className="flex items-center justify-between px-3 py-2.5 text-xs">
                     <span className="flex items-center gap-1.5 truncate">
                       {email}
-                      {allowlist.admins.includes(email) && <Crown className="h-3 w-3 text-amber-400" aria-label="Yönetici" />}
+                      {admin && <Crown className="h-3 w-3 text-amber-400" aria-label="Yönetici" />}
                       {email === me.email && <span className="text-[#8696a0]">(siz)</span>}
                     </span>
-                    {isAdmin && email !== me.email && (
+                    {email !== me.email && (
                       <button
                         onClick={() => handleRemoveEmail(email)}
                         className="rounded p-1 text-[#8696a0] hover:bg-red-500/20 hover:text-red-300 cursor-pointer"

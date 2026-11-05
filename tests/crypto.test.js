@@ -91,7 +91,9 @@ describe('Güvenlik numarası ve kodlar', () => {
   it('doğrulama kodu kodlanır/çözülür', async () => {
     const a = await user('Ali@X.com');
     const code = encodeVerifyCode(a.email, a.pub);
-    expect(decodeVerifyCode(code)).toEqual({ email: 'ali@x.com', publicKey: a.pub });
+    expect(decodeVerifyCode(code)).toEqual({ code: null, email: 'ali@x.com', publicKey: a.pub });
+    const v2 = encodeVerifyCode(a.email, a.pub, '7K3Q-9XW2');
+    expect(decodeVerifyCode(v2)).toEqual({ code: '7K3Q-9XW2', email: 'ali@x.com', publicKey: a.pub });
     expect(decodeVerifyCode('rastgele metin')).toBeNull();
     expect(decodeTransferCode(code)).toBeNull();
   });

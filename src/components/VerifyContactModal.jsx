@@ -1,6 +1,6 @@
 // napisen - Kişi doğrulama: QR okutma veya güvenlik numarası karşılaştırma
 import React, { useEffect, useState } from 'react';
-import { X, QrCode as QrIcon, ScanLine, Hash, ShieldCheck, ShieldAlert, CheckCircle2 } from 'lucide-react';
+import { X, QrCode as QrIcon, ScanLine, Hash, ShieldCheck, ShieldAlert, CheckCircle2, UserMinus } from 'lucide-react';
 import QrCode from './QrCode';
 import QrScanner from './QrScanner';
 import { computeSafetyNumber, encodeVerifyCode } from '../services/crypto';
@@ -8,11 +8,14 @@ import { computeSafetyNumber, encodeVerifyCode } from '../services/crypto';
 export default function VerifyContactModal({
   me,
   identity,
+  myCode,
   contact,
   trusted,
   onVerifyByCode,
   onVerifyBySafetyNumber,
   onUnverify,
+  onAcceptKey,
+  onRemoveContact,
   onClose,
 }) {
   const [tab, setTab] = useState('show');
@@ -21,7 +24,7 @@ export default function VerifyContactModal({
   const [success, setSuccess] = useState('');
   const [busy, setBusy] = useState(false);
 
-  const myCode = encodeVerifyCode(me.email, identity.publicKey);
+  const myVerifyCode = encodeVerifyCode(me.email, identity.publicKey, myCode);
 
   useEffect(() => {
     if (!contact?.publicKey) {
@@ -72,7 +75,7 @@ export default function VerifyContactModal({
         <div className="flex items-center justify-between bg-[#202c33] px-4 py-3">
           <div>
             <h2 className="text-sm font-semibold text-[#e9edef]">{contact.name} ile doğrulama</h2>
-            <p className="text-[11px] text-[#8696a0]">{contact.email}</p>
+            {contact.code && <p className="text-[11px] font-mono text-[#8696a0]">{contact.code}</p>}
           </div>
           <button onClick={onClose} className="rounded-full p-1.5 text-[#aebac1] hover:bg-[#374248] cursor-pointer">
             <X className="h-5 w-5" />
@@ -82,15 +85,26 @@ export default function VerifyContactModal({
         <div className="px-4 pt-3">
           {status === 'verified' && (
             <div className="flex items-center gap-2 rounded-lg bg-[#00a884]/10 p-2.5 text-xs text-[#00a884] border border-[#00a884]/30">
-              <ShieldCheck className="h-4 w-4 shrink-0" /> Doğrulanmış ({trusted?.method === 'qr' ? 'QR ile' : trusted?.method === 'transfer' ? 'taşınan cihazdan' : 'güvenlik numarasıyla'})
+              <ShieldCheck className="h-4 w-4 shrink-0" /> Doğrulanmış ({trusted?.method === 'qr' ? 'QR ile' : 'güvenlik numarasıyla'})
             </div>
           )}
           {status === 'changed' && (
             <div className="flex gap-2 rounded-lg bg-red-950/60 p-2.5 text-xs text-red-200 border border-red-800/60">
               <ShieldAlert className="h-4 w-4 shrink-0" />
-              <span>
-                Bu kişinin anahtarı değişti. Yeni bir cihaz kurmuş olabilir; ya da biri araya girmeye çalışıyor olabilir.
-                Yeniden doğrulamadan mesaj gönderilemez.
+              <span className="space-y-2">
+                <span className="block">
+                  Bu kişinin anahtarı değişti. Yeni bir cihaz kurmuş olabilir; ya da biri araya girmeye çalışıyor
+                  olabilir. Mümkünse QR ile doğrulayın veya yeni anahtarı kabul edin.
+                </span>
+                <button
+                  onClick={async () => {
+                    await onAcceptKey(contact.email);
+                    setSuccess('Yeni anahtar kabul edildi. Mesajlaşmaya devam edebilirsiniz.');
+                  }}
+                  className="rounded-md bg-red-600 px-2.5 py-1 text-[11px] font-semibold text-white cursor-pointer"
+                >
+                  Yeni anahtarı kabul et
+                </button>
               </span>
             </div>
           )}
@@ -101,8 +115,8 @@ export default function VerifyContactModal({
           )}
           {status === 'unverified' && (
             <p className="text-xs leading-relaxed text-[#8696a0]">
-              Yüz yüzeyken birbirinizin kodunu okutun. <strong className="text-[#e9edef]">İki taraf da</strong> diğerinin
-              kodunu okutmalıdır.
+              Mesajlarınız zaten uçtan uca şifreli. Doğrulama <strong className="text-[#e9edef]">isteğe bağlıdır</strong>:
+              konuştuğunuz kişinin gerçekten o olduğundan emin olmak için yüz yüzeyken birbirinizin kodunu okutun.
             </p>
           )}
         </div>
@@ -123,7 +137,7 @@ export default function VerifyContactModal({
 
           {tab === 'show' && (
             <div className="flex flex-col items-center gap-2 text-center">
-              <QrCode value={myCode} />
+              <QrCode value={myVerifyCode} />
               <p className="text-[11px] text-[#8696a0]">{contact.name}, bu kodu kendi telefonundan okutsun.</p>
             </div>
           )}
@@ -172,6 +186,18 @@ export default function VerifyContactModal({
               Doğrulamayı kaldır
             </button>
           )}
+
+          <button
+            onClick={() => {
+              if (window.confirm(`${contact.name} sohbet listenizden kaldırılsın mı? Mesaj geçmişi bu cihazda kalır.`)) {
+                onRemoveContact(contact.email);
+                onClose();
+              }
+            }}
+            className="flex w-full items-center justify-center gap-1.5 pt-1 text-center text-[11px] text-[#8696a0] hover:text-red-300 cursor-pointer"
+          >
+            <UserMinus className="h-3.5 w-3.5" /> Kişiyi listeden kaldır
+          </button>
         </div>
       </div>
     </div>

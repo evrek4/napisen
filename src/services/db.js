@@ -1,12 +1,13 @@
 // napisen - Cihaz İçi Yerel Veritabanı (IndexedDB)
 // - identity: Bu cihazın kimlik anahtar çifti (hesap başına bir kayıt)
-// - trusted:  QR / güvenlik numarası ile doğrulanmış kişi anahtarları
+// - trusted:  Kişi anahtarları (ilk görüşte sabitlenir; QR / güvenlik numarası ile "doğrulanmış" işaretlenir)
+// - mycontacts: Kullanıcının sohbet ettiği kişiler
 // - messages, media, conversations: Mesaj geçmişi (Hayalet Mod kapalıyken)
 
 import { openDB } from 'idb';
 
 const DB_NAME = 'napisen_local_db';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 let dbPromise = null;
 
@@ -31,6 +32,10 @@ export function getLocalDB() {
         }
         if (!db.objectStoreNames.contains('identity')) {
           db.createObjectStore('identity', { keyPath: 'email' });
+        }
+        if (!db.objectStoreNames.contains('mycontacts')) {
+          // Kullanıcının kendi eklediği kişiler (yalnızca bu cihazda; sunucu kişi listesini bilmez)
+          db.createObjectStore('mycontacts', { keyPath: 'id' });
         }
         if (!db.objectStoreNames.contains('trusted')) {
           // key: `${owner}|${contact}` (aynı cihazda birden fazla hesap olabilir)
@@ -66,20 +71,37 @@ export async function getTrustedContacts(owner) {
   return all.filter((t) => t.owner === owner);
 }
 
-export async function saveTrustedContact(owner, contactEmail, publicKey, method) {
-  return (await getLocalDB()).put('trusted', {
+// method: 'tofu' (ilk görüşte sabitlendi, doğrulanmadı) | 'qr' | 'safety-number'
+export async function saveTrustedContact(owner, contactEmail, publicKey, method, verified) {
+  const record = {
     id: `${owner}|${contactEmail}`,
     owner,
     email: contactEmail,
     publicKey,
-    method, // 'qr' | 'safety-number' | 'transfer'
+    method,
+    verified: verified ?? method !== 'tofu',
     verifiedAt: Date.now(),
-  });
+  };
+  await (await getLocalDB()).put('trusted', record);
+  return record;
 }
 
-export async function removeTrustedContact(owner, contactEmail) {
-  return (await getLocalDB()).delete('trusted', `${owner}|${contactEmail}`);
+// ---------- Kişiler ----------
+export async function getMyContacts(owner) {
+  const all = await (await getLocalDB()).getAll('mycontacts');
+  return all.filter((c) => c.owner === owner);
 }
+
+export async function saveMyContact(owner, email, name, code) {
+  const record = { id: `${owner}|${email}`, owner, email, name: name || '', code: code || null, addedAt: Date.now() };
+  await (await getLocalDB()).put('mycontacts', record);
+  return record;
+}
+
+export async function removeMyContact(owner, email) {
+  return (await getLocalDB()).delete('mycontacts', `${owner}|${email}`);
+}
+
 
 // ---------- Mesajlar ----------
 export async function saveMessage(message) {
@@ -155,6 +177,7 @@ export async function wipeDevice() {
   await clearMessageHistory();
   await db.clear('identity');
   await db.clear('trusted');
+  await db.clear('mycontacts');
 }
 
 export async function deleteLocalMessage(id) {

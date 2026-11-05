@@ -5,19 +5,22 @@ import ChatArea from './ChatArea';
 import SettingsModal from './SettingsModal';
 import ImageLightbox from './ImageLightbox';
 import VerifyContactModal from './VerifyContactModal';
+import NewChatModal from './NewChatModal';
 import useMessenger from '../hooks/useMessenger';
 import { getPreferences, savePreferences } from '../config/preferences';
 import { clearMessageHistory } from '../services/db';
 
-export default function MessengerApp({ me, identityState, onLogout }) {
+export default function MessengerApp({ me, isAdmin, identityState, onLogout }) {
   const identity = identityState.identity;
   const [preferences, setPreferences] = useState(getPreferences);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [lightbox, setLightbox] = useState(null);
   const [verifyEmail, setVerifyEmail] = useState(null);
+  const [newChatOpen, setNewChatOpen] = useState(false);
   const [toast, setToast] = useState('');
 
-  const messenger = useMessenger({ me, identity, preferences });
+  const myCode = identityState.profile?.code || null;
+  const messenger = useMessenger({ me, identity, myCode, preferences });
   const { contacts, activeEmail, openConversation } = messenger;
   const activeContact = contacts.find((c) => c.email === activeEmail) || null;
 
@@ -66,11 +69,13 @@ export default function MessengerApp({ me, identityState, onLogout }) {
       <div className={`${activeContact ? 'hidden md:flex' : 'flex'} h-full w-full md:w-auto shrink-0`}>
         <Sidebar
           currentUser={me}
+          myCode={myCode}
           contacts={contacts}
           activeContact={activeContact}
           syncError={messenger.syncError}
           onSelectContact={(c) => openConversation(c.email)}
           onOpenSettings={() => setIsSettingsOpen(true)}
+          onNewChat={() => setNewChatOpen(true)}
         />
       </div>
 
@@ -82,6 +87,7 @@ export default function MessengerApp({ me, identityState, onLogout }) {
           onTogglePreference={handleTogglePreference}
           onBack={() => openConversation(null)}
           onVerify={() => setVerifyEmail(activeContact.email)}
+          onAcceptKey={guard(() => messenger.acceptNewKey(activeContact.email))}
           onSendText={guard((text) => messenger.sendText(activeContact.email, text))}
           onSendAudio={guard((blob, duration) => messenger.sendAudio(activeContact.email, blob, duration))}
           onSendImage={guard((blob) => messenger.sendImage(activeContact.email, blob))}
@@ -95,7 +101,11 @@ export default function MessengerApp({ me, identityState, onLogout }) {
         <SettingsModal
           me={me}
           identity={identity}
-          allowlist={messenger.allowlist}
+          myCode={myCode}
+          discoverable={Boolean(identityState.profile?.discoverable)}
+          onSetDiscoverable={identityState.setDiscoverable}
+          onRegenerateCode={identityState.regenerateCode}
+          isAdmin={isAdmin}
           contacts={contacts}
           preferences={preferences}
           onTogglePreference={handleTogglePreference}
@@ -117,12 +127,27 @@ export default function MessengerApp({ me, identityState, onLogout }) {
         <VerifyContactModal
           me={me}
           identity={identity}
+          myCode={myCode}
           contact={contacts.find((c) => c.email === verifyEmail)}
           trusted={messenger.trusted[verifyEmail]}
           onVerifyByCode={messenger.verifyByCode}
           onVerifyBySafetyNumber={messenger.verifyBySafetyNumber}
           onUnverify={messenger.unverifyContact}
+          onAcceptKey={messenger.acceptNewKey}
+          onRemoveContact={messenger.removeContact}
           onClose={() => setVerifyEmail(null)}
+        />
+      )}
+
+      {newChatOpen && (
+        <NewChatModal
+          myCode={myCode}
+          onAdd={async (email) => {
+            const added = await messenger.addContact(email);
+            setNewChatOpen(false);
+            openConversation(added);
+          }}
+          onClose={() => setNewChatOpen(false)}
         />
       )}
 

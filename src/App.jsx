@@ -9,7 +9,7 @@ import LegalPage from './components/LegalPage';
 import LegalLinks from './components/LegalLinks';
 import { auth, watchAuth, fetchAccountStatus, fetchMyProfile, logout } from './services/firebase';
 import { normalizeEmail } from './services/crypto';
-import { OWNER_EMAIL, TERMS_VERSION } from './config/app';
+import { TERMS_VERSION } from './config/app';
 import { LEGAL_PAGES } from './legal/texts';
 import useIdentity from './hooks/useIdentity';
 
@@ -110,7 +110,7 @@ export default function App() {
       const email = normalizeEmail(authUser.email);
       try {
         const [status, profile] = await Promise.all([
-          fetchAccountStatus(email, OWNER_EMAIL),
+          fetchAccountStatus(email),
           fetchMyProfile(email).catch(() => null),
         ]);
         if (cancelled) return;

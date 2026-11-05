@@ -3,18 +3,16 @@ rules_version = '2';
 // napisen - Firestore Güvenlik Kuralları
 //
 // - Kayıt herkese açıktır: Google hesabıyla giriş yapan ve Kullanım Koşullarını kabul eden herkes üye olur.
-// - Roller: Sahip (owner) admindir. Admin, istediği kullanıcıya moderatör yetkisi verebilir (roles/{email}).
-//   Moderatörler şikâyetleri inceler ve hesapları askıya alabilir (bans/{email}).
+// - Roller veritabanında tutulur: roles/{email} = { role: 'admin' | 'moderator' }. Kodda e-posta yoktur.
+//   İLK ADMİN Firebase Console'dan elle eklenir (kimse kendini admin yapamaz). Sonrasında adminler
+//   uygulama içinden başka admin ve moderatör atayabilir. Moderatörler şikâyetleri inceler ve hesapları
+//   askıya alabilir (bans/{email}).
 // - Kişi bulma: Kullanıcılar birbirini listeleyemez. Kişi kodunu (codes/{kod}) bilen kişi bulunabilir;
 //   e-postayla bulunmak isteğe bağlıdır (users/{email}.discoverable).
 // - Engelleme: blocks/{engelleyen}/list/{engellenen}. Engellenen kişi mesaj gönderemez.
 // - Mesaj içerikleri uçtan uca şifreli olduğundan sunucu (ve moderatörler) yalnızca şifreli veriyi görür.
 service cloud.firestore {
   match /databases/{database}/documents {
-
-    function owner() {
-      return 'achartave@gmail.com';
-    }
 
     function signedIn() {
       return request.auth != null
@@ -35,17 +33,18 @@ service cloud.firestore {
       return signedIn() && !banned(me());
     }
 
-    function isAdmin() {
-      return allowed() && me() == owner();
+    function roleOf(email) {
+      return exists(/databases/$(database)/documents/roles/$(email))
+        ? get(/databases/$(database)/documents/roles/$(email)).data.role
+        : '';
     }
 
-    function isModerator(email) {
-      return exists(/databases/$(database)/documents/roles/$(email))
-        && get(/databases/$(database)/documents/roles/$(email)).data.role == 'moderator';
+    function isAdmin() {
+      return allowed() && roleOf(me()) == 'admin';
     }
 
     function isMod() {
-      return allowed() && (me() == owner() || isModerator(me()));
+      return allowed() && roleOf(me()) in ['admin', 'moderator'];
     }
 
     // Mesaj alabilecek kullanıcı: kayıtlı ve askıda değil
@@ -84,13 +83,15 @@ service cloud.firestore {
       allow get: if signedIn() && (email == me() || isAdmin());
       allow list: if isAdmin();
       allow create, update: if isAdmin()
-        && email != owner()
+        // Admin kendi rolünü değiştiremez (kendini kilitlemeyi önler)
+        && email != me()
         && email == email.lower()
         && request.resource.data.keys().hasOnly(['role', 'grantedBy', 'grantedAt'])
-        && request.resource.data.role == 'moderator'
+        && request.resource.data.role in ['moderator', 'admin']
         && request.resource.data.grantedBy == me()
         && request.resource.data.grantedAt == request.time;
-      allow delete: if isAdmin();
+      // Admin kendi rolünü silemez
+      allow delete: if isAdmin() && email != me();
     }
 
     // ---------- Askıya alınan hesaplar (moderatörler yönetir) ----------
@@ -99,11 +100,11 @@ service cloud.firestore {
       allow get: if signedIn() && (email == me() || isMod());
       allow list: if isMod();
       allow create: if isMod()
-        && email != owner()
         && email != me()
         && email == email.lower()
-        // Moderatörü yalnızca admin askıya alabilir
-        && (isAdmin() || !isModerator(email))
+        // Admin askıya alınamaz; moderatörü yalnızca admin askıya alabilir
+        && roleOf(email) != 'admin'
+        && (isAdmin() || roleOf(email) != 'moderator')
         && request.resource.data.keys().hasOnly(['reason', 'by', 'at'])
         && request.resource.data.reason is string
         && request.resource.data.reason.size() <= 500

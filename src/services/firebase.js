@@ -98,13 +98,13 @@ export function logout() {
 
 // ---------- Hesap durumu: rol ve askı ----------
 // { role: 'admin' | 'moderator' | 'user', ban: { reason } | null }
-export async function fetchAccountStatus(email, ownerEmail) {
+export async function fetchAccountStatus(email) {
   const [banSnap, roleSnap] = await Promise.all([
     getDoc(doc(db, 'bans', email)),
     getDoc(doc(db, 'roles', email)),
   ]);
-  const role =
-    email === ownerEmail ? 'admin' : roleSnap.exists() && roleSnap.data().role === 'moderator' ? 'moderator' : 'user';
+  const stored = roleSnap.exists() ? roleSnap.data().role : null;
+  const role = stored === 'admin' || stored === 'moderator' ? stored : 'user';
   return { role, ban: banSnap.exists() ? banSnap.data() : null };
 }
 
@@ -117,8 +117,9 @@ export function subscribeRoles(callback, onError) {
   );
 }
 
-export function grantModerator(email, grantedBy) {
-  return setDoc(doc(db, 'roles', email), { role: 'moderator', grantedBy, grantedAt: serverTimestamp() });
+// role: 'moderator' | 'admin'
+export function grantRole(email, role, grantedBy) {
+  return setDoc(doc(db, 'roles', email), { role, grantedBy, grantedAt: serverTimestamp() });
 }
 
 export function revokeRole(email) {

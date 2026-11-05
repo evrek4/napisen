@@ -14,7 +14,7 @@ export const LEGAL = {
   appName: 'napisen',
   controllerName: 'napisen uygulama yöneticisi',
   controllerAddress: '',
-  contactEmail: 'achartave@gmail.com',
+  contactEmail: 'info@napisen.app',
   lastUpdated: '5 Kasım 2026',
   jurisdiction: 'Türkiye Cumhuriyeti',
 };

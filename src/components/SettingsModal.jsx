@@ -21,6 +21,7 @@ import {
   RefreshCw,
   Volume2,
   Keyboard,
+  Copy,
 } from 'lucide-react';
 import QrScanner from './QrScanner';
 import MyCodeCard from './MyCodeCard';
@@ -309,6 +310,25 @@ export default function SettingsModal({
                     </div>
                   </>
                 )}
+              </div>
+
+              <div className="rounded-xl bg-[#182229] p-4 border border-[#2a3942] flex items-start justify-between gap-4">
+                <div className="flex gap-3">
+                  <Copy className="h-5 w-5 text-amber-300 shrink-0 mt-0.5" />
+                  <div>
+                    <h4 className="text-sm font-semibold">Mesajlarım kopyalanabilir ve iletilebilir</h4>
+                    <p className="mt-1 text-xs leading-relaxed text-[#8696a0]">
+                      Kapatırsanız bundan sonra gönderdiğiniz mesajlar karşı tarafta kopyalanamaz, iletilemez ve
+                      fotoğraflar indirilemez. <strong>Not:</strong> Ekran görüntüsü almayı veya başka bir cihazla
+                      fotoğraf çekmeyi hiçbir uygulama tam olarak engelleyemez.
+                    </p>
+                  </div>
+                </div>
+                <Toggle
+                  on={preferences.allowCopy !== false}
+                  onClick={() => onTogglePreference('allowCopy')}
+                  label="Kopyalama ve iletmeye izin ver"
+                />
               </div>
 
               <div className="rounded-xl bg-[#182229] p-4 border border-[#2a3942] flex items-start justify-between gap-4">

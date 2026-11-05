@@ -7,6 +7,7 @@ import ImageLightbox from './ImageLightbox';
 import VerifyContactModal from './VerifyContactModal';
 import NewChatModal from './NewChatModal';
 import ReportModal from './ReportModal';
+import ForwardModal from './ForwardModal';
 import useMessenger from '../hooks/useMessenger';
 import { getPreferences, savePreferences } from '../config/preferences';
 import { clearMessageHistory } from '../services/db';
@@ -27,7 +28,14 @@ export default function MessengerApp({ me, role, identityState, onLogout }) {
   const [verifyEmail, setVerifyEmail] = useState(null);
   const [newChatOpen, setNewChatOpen] = useState(false);
   const [reportEmail, setReportEmail] = useState(null);
+  const [forwardMsg, setForwardMsg] = useState(null);
   const [toast, setToast] = useState('');
+  const [info, setInfo] = useState('');
+  useEffect(() => {
+    if (!info) return undefined;
+    const t = setTimeout(() => setInfo(''), 2500);
+    return () => clearTimeout(t);
+  }, [info]);
 
   const myCode = identityState.profile?.code || null;
   const [inAppAlert, setInAppAlert] = useState(null);
@@ -167,7 +175,16 @@ export default function MessengerApp({ me, role, identityState, onLogout }) {
           onSendAudio={guard((blob, duration) => messenger.sendAudio(activeContact.email, blob, duration))}
           onSendImage={guard((blob) => messenger.sendImage(activeContact.email, blob))}
           onRetry={guard(messenger.retry)}
-          onImageClick={(blob, mimeType) => setLightbox({ blob, mimeType })}
+          onImageClick={(blob, mimeType, protect) => setLightbox({ blob, mimeType, protect })}
+          onCopyMessage={async (msg) => {
+            try {
+              await navigator.clipboard.writeText(msg.text || '');
+              setInfo('Mesaj kopyalandı.');
+            } catch {
+              setToast('Kopyalanamadı. Tarayıcı pano erişimine izin vermedi.');
+            }
+          }}
+          onForwardMessage={(msg) => setForwardMsg(msg)}
           onError={setToast}
         />
       </div>
@@ -239,7 +256,27 @@ export default function MessengerApp({ me, role, identityState, onLogout }) {
         />
       )}
 
-      {lightbox && <ImageLightbox blob={lightbox.blob} mimeType={lightbox.mimeType} onClose={() => setLightbox(null)} />}
+      {lightbox && (
+        <ImageLightbox blob={lightbox.blob} mimeType={lightbox.mimeType} protect={lightbox.protect} onClose={() => setLightbox(null)} />
+      )}
+
+      {forwardMsg && (
+        <ForwardModal
+          message={forwardMsg}
+          contacts={contacts}
+          onForward={async (to) => {
+            await messenger.forward(forwardMsg, to);
+            setInfo('Mesaj iletildi.');
+          }}
+          onClose={() => setForwardMsg(null)}
+        />
+      )}
+
+      {info && (
+        <div className="fixed bottom-20 left-1/2 z-[60] -translate-x-1/2 rounded-xl bg-[#202c33] px-4 py-2.5 text-xs text-[#e9edef] shadow-xl border border-[#2a3942]">
+          {info}
+        </div>
+      )}
 
       {showNotifPrompt && (
         <div className="fixed bottom-3 left-1/2 z-[55] flex w-[min(92vw,26rem)] -translate-x-1/2 items-center gap-3 rounded-xl border border-[#2a3942] bg-[#202c33] px-3 py-2.5 text-xs text-[#e9edef] shadow-xl">

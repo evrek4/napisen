@@ -36,6 +36,8 @@ export default function ChatArea({
   onSendImage,
   onRetry,
   onImageClick,
+  onCopyMessage,
+  onForwardMessage,
   onError,
 }) {
   const messagesEndRef = useRef(null);
@@ -97,7 +99,7 @@ export default function ChatArea({
   const canSend = canMessage(keyStatus) && !isBlocked;
 
   return (
-    <div className="flex flex-1 flex-col h-full bg-[#0b141a] overflow-hidden select-none">
+    <div className="flex flex-1 flex-col h-full bg-[#0b141a] overflow-hidden">
       {/* ÜST SOHBET BAŞLIĞI */}
       <div className="flex h-16 items-center justify-between bg-[#202c33] px-3 md:px-4 py-2 border-b border-[#222d34] shrink-0">
         <div className="flex min-w-0 items-center gap-3">
@@ -285,6 +287,8 @@ export default function ChatArea({
             onImageClick={onImageClick}
             onRetry={onRetry}
             onMediaLoad={keepAtBottom}
+            onCopy={onCopyMessage}
+            onForward={onForwardMessage}
           />
         ))}
 
@@ -304,6 +308,8 @@ export default function ChatArea({
         }
         onError={onError}
         onTyping={onTyping}
+        protectOn={preferences.allowCopy === false}
+        onToggleProtect={() => onTogglePreference('allowCopy')}
         onSendText={onSendText}
         onSendAudio={onSendAudio}
         onSendImage={onSendImage}

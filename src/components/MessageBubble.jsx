@@ -1,8 +1,24 @@
 // napisen - Mesaj Balonu (Metin, Ses ve Görsel Desteği)
 import React, { useState, useEffect, useRef } from 'react';
+import { ChevronDown, Copy, Forward, ShieldOff } from 'lucide-react';
 import { Play, Pause, Check, CheckCheck, Lock, Mic, FileWarning, Clock, AlertCircle, RotateCw, ShieldQuestion } from 'lucide-react';
 
-export default function MessageBubble({ message, onImageClick, onRetry, onMediaLoad }) {
+export default function MessageBubble({ message, onImageClick, onRetry, onMediaLoad, onCopy, onForward }) {
+  // Karşı taraf kopyalama/iletmeyi kapattıysa bu mesaj korumalıdır
+  const protectedIncoming = !message.isOutgoing && message.protect;
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef(null);
+  useEffect(() => {
+    if (!menuOpen) return undefined;
+    const close = (e) => {
+      if (menuRef.current && !menuRef.current.contains(e.target)) setMenuOpen(false);
+    };
+    document.addEventListener('pointerdown', close);
+    return () => document.removeEventListener('pointerdown', close);
+  }, [menuOpen]);
+  const canCopy = !protectedIncoming && (!message.type || message.type === 'text');
+  const canForward = !protectedIncoming && message.type !== 'undecryptable' && (message.type === 'text' || message.mediaBlob);
+
   const isOutgoing = message.isOutgoing;
   const [audioUrl, setAudioUrl] = useState(null);
   const [imageUrl, setImageUrl] = useState(null);
@@ -71,12 +87,75 @@ export default function MessageBubble({ message, onImageClick, onRetry, onMediaL
   return (
     <div className={`flex w-full ${isOutgoing ? 'justify-end' : 'justify-start'} my-1 px-4`}>
       <div
-        className={`relative max-w-[85%] md:max-w-[70%] rounded-2xl px-3 py-2 shadow-sm ${
+        className={`group relative max-w-[85%] md:max-w-[70%] rounded-2xl px-3 py-2 shadow-sm ${
           isOutgoing
             ? 'bg-[#005c4b] text-[#e9edef] rounded-tr-none'
             : 'bg-[#202c33] text-[#e9edef] rounded-tl-none'
-        }`}
+        } ${protectedIncoming ? 'select-none' : 'select-text'}`}
+        // Korumalı mesajda kopyalama ve sağ tık / uzun basma menüsü kapalı
+        onCopy={protectedIncoming ? (e) => e.preventDefault() : undefined}
+        onContextMenu={(e) => {
+          if (message.type === 'undecryptable') return;
+          e.preventDefault();
+          setMenuOpen(true);
+        }}
       >
+        {/* Mesaj menüsü (masaüstünde üzerine gelince, mobilde uzun basınca) */}
+        {message.type !== 'undecryptable' && (
+          <div ref={menuRef} className="absolute right-1 top-1 z-10">
+            <button
+              onClick={() => setMenuOpen((v) => !v)}
+              aria-label="Mesaj menüsü"
+              className={`flex h-6 w-6 items-center justify-center rounded-full bg-black/30 text-white/80 transition cursor-pointer ${
+                menuOpen ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus:opacity-100'
+              }`}
+            >
+              <ChevronDown className="h-4 w-4" />
+            </button>
+            {menuOpen && (
+              <div className={`absolute top-7 z-20 w-56 overflow-hidden rounded-xl border border-[#2a3942] bg-[#233138] py-1 text-xs shadow-xl ${isOutgoing ? 'right-0' : 'left-0'}`}>
+                {protectedIncoming ? (
+                  <p className="flex items-start gap-2 px-3 py-2 text-[#8696a0]">
+                    <ShieldOff className="h-4 w-4 shrink-0" /> Gönderen bu mesajın kopyalanmasına ve iletilmesine izin
+                    vermiyor.
+                  </p>
+                ) : (
+                  <>
+                    {canCopy && (
+                      <button
+                        onClick={() => {
+                          setMenuOpen(false);
+                          onCopy?.(message);
+                        }}
+                        className="flex w-full items-center gap-2 px-3 py-2 text-left text-[#e9edef] hover:bg-[#2a3942] cursor-pointer"
+                      >
+                        <Copy className="h-4 w-4" /> Kopyala
+                      </button>
+                    )}
+                    {canForward && (
+                      <button
+                        onClick={() => {
+                          setMenuOpen(false);
+                          onForward?.(message);
+                        }}
+                        className="flex w-full items-center gap-2 px-3 py-2 text-left text-[#e9edef] hover:bg-[#2a3942] cursor-pointer"
+                      >
+                        <Forward className="h-4 w-4" /> İlet
+                      </button>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {message.forwarded && (
+          <p className="mb-1 flex items-center gap-1 text-[10px] italic text-[#8696a0]">
+            <Forward className="h-3 w-3" /> İletildi
+          </p>
+        )}
+
         {/* SESLİ MESAJ GÖRÜNÜMÜ */}
         {message.type === 'audio' && (
           <div className="flex items-center gap-3 py-1 pr-1 min-w-[220px]">
@@ -124,7 +203,8 @@ export default function MessageBubble({ message, onImageClick, onRetry, onMediaL
                 onLoad={onMediaLoad}
                 src={imageUrl}
                 alt="Şifreli Görsel"
-                onClick={() => onImageClick && onImageClick(message.mediaBlob, message.mimeType)}
+                onClick={() => onImageClick && onImageClick(message.mediaBlob, message.mimeType, protectedIncoming)}
+                draggable={!protectedIncoming}
                 className="max-h-72 w-full object-cover rounded-xl cursor-pointer hover:opacity-95 transition"
               />
             ) : (
@@ -158,6 +238,12 @@ export default function MessageBubble({ message, onImageClick, onRetry, onMediaL
 
         {/* ALT BİLGİ: SAAT, E2EE KİLİDİ VE TİKLER */}
         <div className="flex items-center justify-end gap-1 text-[10px] text-[#8696a0] mt-0.5 select-none">
+          {message.protect && (
+            <ShieldOff
+              className="h-2.5 w-2.5 text-amber-300"
+              aria-label={isOutgoing ? 'Kopyalanamaz / iletilemez olarak gönderildi' : 'Kopyalanamaz / iletilemez'}
+            />
+          )}
           <Lock className="h-2.5 w-2.5 text-[#00a884]" aria-label="Uçtan uca şifreli" />
           <span>{formatTime(message.timestamp)}</span>
 

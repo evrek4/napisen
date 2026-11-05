@@ -1,11 +1,21 @@
 // napisen - Mesaj Giriş ve Ses Kayıt Çubuğu
 import React, { useEffect, useRef, useState } from 'react';
-import { Send, Mic, Paperclip, Trash2, Lock } from 'lucide-react';
+import { Send, Mic, Paperclip, Trash2, Lock, ShieldOff, Copy } from 'lucide-react';
 import { audioRecorder } from '../services/audio';
 import { prepareImage } from '../services/media';
 import { MAX_TEXT_LENGTH } from '../hooks/useMessenger';
 
-export default function InputBar({ disabled, disabledReason, onSendText, onSendAudio, onSendImage, onError, onTyping }) {
+export default function InputBar({
+  disabled,
+  disabledReason,
+  onSendText,
+  onSendAudio,
+  onSendImage,
+  onError,
+  onTyping,
+  protectOn,
+  onToggleProtect,
+}) {
   const [text, setText] = useState('');
   const [isRecording, setIsRecording] = useState(false);
   const [recordSeconds, setRecordSeconds] = useState(0);
@@ -77,6 +87,25 @@ export default function InputBar({ disabled, disabledReason, onSendText, onSendA
     audioRecorder.cancelRecording();
     setIsRecording(false);
     setRecordSeconds(0);
+  };
+
+  // Panodan görsel yapıştırma (Ctrl+V / uzun basıp Yapıştır)
+  const handlePaste = async (e) => {
+    const items = Array.from(e.clipboardData?.items || []);
+    const imageItem = items.find((it) => it.kind === 'file' && it.type.startsWith('image/'));
+    if (!imageItem) return; // düz metin normal şekilde yapışsın
+    e.preventDefault();
+    const file = imageItem.getAsFile();
+    if (!file || disabled) return;
+    if (!window.confirm('Panodaki görsel gönderilsin mi?')) return;
+    setPreparing(true);
+    try {
+      onSendImage(await prepareImage(file));
+    } catch (err) {
+      onError?.(err.message || 'Görsel hazırlanamadı.');
+    } finally {
+      setPreparing(false);
+    }
   };
 
   const handleFileChange = async (e) => {
@@ -154,6 +183,25 @@ export default function InputBar({ disabled, disabledReason, onSendText, onSendA
       ) : (
         /* NORMAL METİN / MEDYA GİRİŞ ALANI */
         <div className="flex items-center gap-2">
+          {/* Kopyalama / iletme koruması */}
+          {onToggleProtect && (
+            <button
+              onClick={onToggleProtect}
+              title={
+                protectOn
+                  ? 'Koruma açık: mesajlarınız karşı tarafta kopyalanamaz ve iletilemez. Kapatmak için dokunun.'
+                  : 'Koruma kapalı: mesajlarınız kopyalanabilir ve iletilebilir. Açmak için dokunun.'
+              }
+              aria-label="Kopyalama koruması"
+              aria-pressed={Boolean(protectOn)}
+              className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full transition cursor-pointer ${
+                protectOn ? 'text-amber-300 bg-amber-500/10' : 'text-[#8696a0] hover:text-[#e9edef] hover:bg-[#374248]'
+              }`}
+            >
+              {protectOn ? <ShieldOff className="h-5 w-5" /> : <Copy className="h-5 w-5" />}
+            </button>
+          )}
+
           {/* Görsel Ekle Butonu */}
           <button
             onClick={() => fileInputRef.current?.click()}
@@ -174,6 +222,7 @@ export default function InputBar({ disabled, disabledReason, onSendText, onSendA
                 onTyping?.(e.target.value.trim().length > 0);
               }}
               onBlur={() => onTyping?.(false)}
+              onPaste={handlePaste}
               onKeyDown={handleKeyDown}
               placeholder={preparing ? 'Görsel hazırlanıyor...' : 'Bir mesaj yazın...'}
               maxLength={MAX_TEXT_LENGTH}

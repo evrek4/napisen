@@ -10,6 +10,7 @@ export const DEFAULT_PREFERENCES = {
   sendTyping: true,            // "Yazıyor..." bilgisini karşı tarafa gönder
   notifications: true,         // Yeni mesaj bildirimleri
   notificationSound: true,     // Bildirim sesi
+  allowCopy: true,             // Karşı taraf mesajlarımı kopyalayabilir / iletebilir
 };
 
 export function getPreferences() {

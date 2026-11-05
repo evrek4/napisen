@@ -427,6 +427,8 @@ export default function useMessenger({ me, identity, myCode, preferences, onInco
           text: header.type === 'text' ? String(header.text || '') : '',
           duration: header.duration || null,
           mimeType: header.mimeType || null,
+          protect: Boolean(header.protect),
+          forwarded: Boolean(header.forwarded),
           timestamp: header.ts || base.timestamp,
           mediaBlob,
           // Sabitlenen anahtardan farklı bir anahtarla geldiyse uyar
@@ -506,6 +508,8 @@ export default function useMessenger({ me, identity, myCode, preferences, onInco
           text: header.type === 'text' ? String(header.text || '') : '',
           duration: header.duration || null,
           mimeType: header.mimeType || null,
+          protect: Boolean(header.protect),
+          forwarded: Boolean(header.forwarded),
           timestamp: header.ts || Date.now(),
           mediaBlob,
         };
@@ -600,6 +604,9 @@ export default function useMessenger({ me, identity, myCode, preferences, onInco
         duration: content.duration || null,
         mimeType: content.blob?.type || null,
         mediaBlob: content.blob || null,
+        // Gönderen kopyalama/iletmeyi kapattıysa (Ayarlar → Gizlilik)
+        protect: prefsRef.current.allowCopy === false,
+        forwarded: Boolean(content.forwarded),
       };
 
       await persist(msg);
@@ -610,7 +617,15 @@ export default function useMessenger({ me, identity, myCode, preferences, onInco
         const key = await getKey(to, trustedKey);
         const header = await encryptJSON(
           key,
-          { type: msg.type, text: msg.text, duration: msg.duration, mimeType: msg.mimeType, ts },
+          {
+            type: msg.type,
+            text: msg.text,
+            duration: msg.duration,
+            mimeType: msg.mimeType,
+            ts,
+            protect: msg.protect,
+            forwarded: msg.forwarded,
+          },
           headerAad(id, myEmail, to)
         );
         let media = null;
@@ -673,6 +688,22 @@ export default function useMessenger({ me, identity, myCode, preferences, onInco
   );
 
   const sendImage = useCallback((to, blob) => send(to, { type: 'image', blob }), [send]);
+
+  // İletme: gönderen korumaya aldıysa iletilemez
+  const forward = useCallback(
+    async (msg, to) => {
+      if (!msg.isOutgoing && msg.protect) throw new Error('Gönderen bu mesajın iletilmesine izin vermiyor.');
+      if (msg.type === 'undecryptable') throw new Error('Bu mesaj iletilemez.');
+      await send(to, {
+        type: msg.type,
+        text: msg.text,
+        duration: msg.duration,
+        blob: msg.mediaBlob || null,
+        forwarded: true,
+      });
+    },
+    [send]
+  );
 
   // Başarısız mesajı yeni kimlikle tekrar gönder, eskisini kaldır
   const retry = useCallback(
@@ -895,6 +926,7 @@ export default function useMessenger({ me, identity, myCode, preferences, onInco
     unblock,
     report,
     notifyTyping,
+    forward,
     trusted,
     clearMemory,
   };

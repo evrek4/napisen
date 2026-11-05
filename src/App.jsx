@@ -1,5 +1,5 @@
 // napisen - Ana Uygulama Çerçevesi
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Loader2, Ban, LogOut } from 'lucide-react';
 import AuthScreen from './components/AuthScreen';
 import SetupScreen from './components/SetupScreen';
@@ -7,7 +7,7 @@ import MessengerApp from './components/MessengerApp';
 import ConsentScreen from './components/ConsentScreen';
 import LegalPage from './components/LegalPage';
 import LegalLinks from './components/LegalLinks';
-import { watchAuth, fetchAccountStatus, fetchMyProfile, logout } from './services/firebase';
+import { auth, watchAuth, fetchAccountStatus, fetchMyProfile, logout } from './services/firebase';
 import { normalizeEmail } from './services/crypto';
 import { OWNER_EMAIL, TERMS_VERSION } from './config/app';
 import { LEGAL_PAGES } from './legal/texts';
@@ -48,7 +48,49 @@ export default function App() {
   const [acceptedNow, setAcceptedNow] = useState(false);
   const [authError, setAuthError] = useState('');
 
-  useEffect(() => watchAuth((u) => setAuthUser(u || null)), []);
+  // Oturum başka bir sekmede kapatılır / değiştirilirse kullanıcıya nedenini söyle
+  // (Firebase oturumu aynı tarayıcı profilindeki tüm sekmelerde ortaktır.)
+  const lastEmailRef = useRef(null);
+  const selfLogoutRef = useRef(false);
+  const lastAuthErrorRef = useRef('');
+  const [switchNotice, setSwitchNotice] = useState('');
+
+  const doLogout = () => {
+    selfLogoutRef.current = true;
+    return logout();
+  };
+
+  useEffect(
+    () =>
+      watchAuth((u) => {
+        const prev = lastEmailRef.current;
+        const next = u?.email ? normalizeEmail(u.email) : null;
+        if (prev && !next && !selfLogoutRef.current) {
+          const code = lastAuthErrorRef.current;
+          setAuthError(
+            'Oturumunuz kapandı. Bu tarayıcıda başka bir sekmede çıkış yapılmış, tarayıcı verileri bir eklenti tarafından temizlenmiş veya Google oturum süresi dolmuş olabilir.' +
+              (code ? ` (Teknik ayrıntı: ${code})` : '')
+          );
+          console.warn('Oturum beklenmedik şekilde kapandı. Son kimlik hatası:', code || 'yok');
+        }
+        // Oturum yenileme hatasını yakala (Firebase bu durumda oturumu kapatabilir)
+        if (u) {
+          u.getIdToken().catch((err) => {
+            lastAuthErrorRef.current = err?.code || String(err);
+            console.warn('Oturum anahtarı yenilenemedi:', err);
+          });
+        }
+        if (prev && next && prev !== next) {
+          setSwitchNotice(
+            `Bu tarayıcıda başka bir sekmede ${next} hesabıyla giriş yapıldığı için bu sekme de o hesaba geçti. İki hesabı aynı anda kullanmak için ikincisini gizli pencerede açın.`
+          );
+        }
+        selfLogoutRef.current = false;
+        lastEmailRef.current = next;
+        setAuthUser(u || null);
+      }),
+    []
+  );
 
   // Hesap durumu: askı, rol ve koşul onayı
   useEffect(() => {
@@ -62,7 +104,7 @@ export default function App() {
     (async () => {
       if (!authUser.emailVerified) {
         setAuthError('Google hesabınızın e-posta adresi doğrulanmamış.');
-        await logout();
+        await doLogout();
         return;
       }
       const email = normalizeEmail(authUser.email);
@@ -83,6 +125,19 @@ export default function App() {
       cancelled = true;
     };
   }, [authUser]);
+
+  // Sekmeye geri dönüldüğünde oturumu tazele; hata olursa kodunu sakla
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.hidden || !auth?.currentUser) return;
+      auth.currentUser.getIdToken().catch((err) => {
+        lastAuthErrorRef.current = err?.code || String(err);
+        console.warn('Oturum anahtarı yenilenemedi:', err);
+      });
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, []);
 
   const termsOk =
     account.status === 'ok' && (acceptedNow || account.profile?.termsVersion === TERMS_VERSION);
@@ -108,6 +163,25 @@ export default function App() {
 
   const identity = useIdentity(me);
 
+  const notice = switchNotice ? (
+    <div className="fixed inset-x-0 top-0 z-[70] flex items-start justify-center p-2">
+      <div className="flex max-w-xl items-start gap-3 rounded-xl border border-amber-700/60 bg-amber-950/95 px-4 py-3 text-xs text-amber-100 shadow-xl">
+        <span className="leading-relaxed">{switchNotice}</span>
+        <button onClick={() => setSwitchNotice('')} className="shrink-0 font-semibold underline cursor-pointer">
+          Tamam
+        </button>
+      </div>
+    </div>
+  ) : null;
+
+  return (
+    <>
+      {notice}
+      {renderScreen()}
+    </>
+  );
+
+  function renderScreen() {
   if (legalPage) return <LegalPage page={legalPage} onBack={closeLegal} />;
   if (authUser === undefined) return <FullScreenLoader text="Yükleniyor..." />;
   if (!authUser) return <AuthScreen error={authError} />;
@@ -132,7 +206,7 @@ export default function App() {
         </p>
         <p className="max-w-sm text-xs text-[#8696a0]">İtiraz için Kullanım Koşulları’ndaki iletişim adresine yazabilirsiniz.</p>
         <LegalLinks />
-        <button onClick={logout} className="flex items-center gap-1.5 rounded-lg bg-[#202c33] px-4 py-2 text-sm cursor-pointer">
+        <button onClick={doLogout} className="flex items-center gap-1.5 rounded-lg bg-[#202c33] px-4 py-2 text-sm cursor-pointer">
           <LogOut className="h-4 w-4" /> Çıkış yap
         </button>
       </div>
@@ -144,7 +218,7 @@ export default function App() {
         email={normalizeEmail(authUser.email)}
         isUpdate={Boolean(account.profile?.termsVersion)}
         onAccept={() => setAcceptedNow(true)}
-        onLogout={logout}
+        onLogout={doLogout}
       />
     );
   }
@@ -161,8 +235,9 @@ export default function App() {
     );
   }
   if (identity.status !== 'ready') {
-    return <SetupScreen me={me} identityState={identity} onLogout={logout} />;
+    return <SetupScreen me={me} identityState={identity} onLogout={doLogout} />;
   }
 
-  return <MessengerApp me={me} role={account.role} identityState={identity} onLogout={logout} />;
+  return <MessengerApp me={me} role={account.role} identityState={identity} onLogout={doLogout} />;
+  }
 }

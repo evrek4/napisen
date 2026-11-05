@@ -6,17 +6,19 @@ import SettingsModal from './SettingsModal';
 import ImageLightbox from './ImageLightbox';
 import VerifyContactModal from './VerifyContactModal';
 import NewChatModal from './NewChatModal';
+import ReportModal from './ReportModal';
 import useMessenger from '../hooks/useMessenger';
 import { getPreferences, savePreferences } from '../config/preferences';
 import { clearMessageHistory } from '../services/db';
 
-export default function MessengerApp({ me, isAdmin, identityState, onLogout }) {
+export default function MessengerApp({ me, role, identityState, onLogout }) {
   const identity = identityState.identity;
   const [preferences, setPreferences] = useState(getPreferences);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [lightbox, setLightbox] = useState(null);
   const [verifyEmail, setVerifyEmail] = useState(null);
   const [newChatOpen, setNewChatOpen] = useState(false);
+  const [reportEmail, setReportEmail] = useState(null);
   const [toast, setToast] = useState('');
 
   const myCode = identityState.profile?.code || null;
@@ -88,6 +90,13 @@ export default function MessengerApp({ me, isAdmin, identityState, onLogout }) {
           onBack={() => openConversation(null)}
           onVerify={() => setVerifyEmail(activeContact.email)}
           onAcceptKey={guard(() => messenger.acceptNewKey(activeContact.email))}
+          onBlock={guard(async () => {
+            if (window.confirm(`${activeContact.name} engellensin mi? Size mesaj gönderemeyecek.`)) {
+              await messenger.block(activeContact.email);
+            }
+          })}
+          onUnblock={guard(() => messenger.unblock(activeContact.email))}
+          onReport={() => setReportEmail(activeContact.email)}
           onSendText={guard((text) => messenger.sendText(activeContact.email, text))}
           onSendAudio={guard((blob, duration) => messenger.sendAudio(activeContact.email, blob, duration))}
           onSendImage={guard((blob) => messenger.sendImage(activeContact.email, blob))}
@@ -105,7 +114,7 @@ export default function MessengerApp({ me, isAdmin, identityState, onLogout }) {
           discoverable={Boolean(identityState.profile?.discoverable)}
           onSetDiscoverable={identityState.setDiscoverable}
           onRegenerateCode={identityState.regenerateCode}
-          isAdmin={isAdmin}
+          role={role}
           contacts={contacts}
           preferences={preferences}
           onTogglePreference={handleTogglePreference}
@@ -136,6 +145,17 @@ export default function MessengerApp({ me, isAdmin, identityState, onLogout }) {
           onAcceptKey={messenger.acceptNewKey}
           onRemoveContact={messenger.removeContact}
           onClose={() => setVerifyEmail(null)}
+        />
+      )}
+
+      {reportEmail && (
+        <ReportModal
+          contact={contacts.find((c) => c.email === reportEmail) || { name: 'Kişi' }}
+          onSubmit={async ({ reason, details, evidence, alsoBlock }) => {
+            await messenger.report(reportEmail, reason, details, evidence);
+            if (alsoBlock) await messenger.block(reportEmail);
+          }}
+          onClose={() => setReportEmail(null)}
         />
       )}
 

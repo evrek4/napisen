@@ -1,7 +1,7 @@
 {
   "name": "napisen",
   "version": "1.0.0",
-  "description": "napisen - Uçtan uca şifreli, yalnızca davetlilere açık mesajlaşma",
+  "description": "napisen - Uçtan uca şifreli güvenli mesajlaşma",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -12,8 +12,7 @@
     "test:rules": "firebase emulators:exec --only firestore --project demo-napisen \"vitest run tests/rules.test.js\"",
     "deploy:rules": "firebase deploy --only firestore:rules",
     "deploy": "npm run build && firebase deploy --only hosting,firestore:rules",
-    "dev:local": "vite --mode emulator",
-    "seed:emulator": "node scripts/seed-emulator.mjs"
+    "dev:local": "vite --mode emulator"
   },
   "dependencies": {
     "firebase": "^13.2.0",

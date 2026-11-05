@@ -1,7 +1,8 @@
-// napisen - Giriş Ekranı (Google hesabı + sunucu tarafı izin listesi)
+// napisen - Giriş / Üyelik Ekranı (Google hesabı)
 import React, { useState } from 'react';
 import { ShieldCheck, AlertCircle, LogIn } from 'lucide-react';
 import { signInWithGoogle, isFirebaseConfigured } from '../services/firebase';
+import LegalLinks from './LegalLinks';
 
 export default function AuthScreen({ error: externalError }) {
   const [loading, setLoading] = useState(false);
@@ -31,12 +32,12 @@ export default function AuthScreen({ error: externalError }) {
             <img src="/logo.svg" alt="napisen logo" className="h-14 w-14" />
           </div>
           <h1 className="text-2xl font-bold tracking-tight">napisen</h1>
-          <p className="mt-1 text-sm text-[#8696a0]">Uçtan uca şifreli • Yalnızca davetliler</p>
+          <p className="mt-1 text-sm text-[#8696a0]">Uçtan uca şifreli güvenli mesajlaşma</p>
         </div>
 
         <div className="mt-6 flex items-center justify-center gap-2 rounded-xl bg-[#182229] py-2 px-3 text-xs text-[#00a884] border border-[#00a884]/20">
           <ShieldCheck className="h-4 w-4 shrink-0" />
-          <span>Yalnızca izin listesindeki Google hesapları girebilir</span>
+          <span>Mesajlarınızı bizim dahil kimse okuyamaz</span>
         </div>
 
         {shownError && (
@@ -58,13 +59,14 @@ export default function AuthScreen({ error: externalError }) {
             className="mt-6 w-full flex items-center justify-center gap-2 rounded-xl bg-[#00a884] py-3 text-sm font-semibold text-[#111b21] hover:bg-[#02906f] active:scale-[0.99] transition disabled:opacity-50 cursor-pointer shadow-lg shadow-[#00a884]/20"
           >
             <LogIn className="h-4 w-4" />
-            {loading ? 'Google penceresi açılıyor...' : 'Google ile Giriş Yap'}
+            {loading ? 'Google penceresi açılıyor...' : 'Google ile Giriş Yap / Üye Ol'}
           </button>
         )}
 
         <p className="mt-4 text-center text-[11px] leading-relaxed text-[#8696a0]">
           Giriş Google tarafından doğrulanır. Google hesabınızda iki adımlı doğrulamayı açmanız önerilir.
         </p>
+        <LegalLinks className="mt-3 text-center" />
       </div>
     </div>
   );

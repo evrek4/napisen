@@ -1,8 +1,8 @@
 // napisen - Firebase Servisi (Kimlik Doğrulama + Firestore)
 //
 // Güvenlik sunucu tarafında, firestore.rules ile sağlanır:
-// - Yalnızca Google ile giriş yapmış ve allowlist/{email} kaydı olan hesaplar erişebilir.
-// - Kullanıcılar birbirlerini listeleyemez; yalnızca e-postasını bildikleri kişiyle yazışabilir.
+// - Google ile giriş yapıp Kullanım Koşullarını kabul eden herkes üye olabilir; askıya alınan hesaplar erişemez.
+// - Kullanıcılar birbirlerini listeleyemez; yalnızca kodunu (veya izin verdiyse e-postasını) bildikleri kişiyle yazışabilir.
 // - Herkes yalnızca kendisine gelen / kendi gönderdiği mesajları okuyabilir.
 // - Kimse başkası adına mesaj yazamaz veya başkasının açık anahtarını değiştiremez.
 
@@ -16,6 +16,8 @@ import {
   onAuthStateChanged,
   signOut,
   connectAuthEmulator,
+  deleteUser,
+  reauthenticateWithPopup,
 } from 'firebase/auth';
 import {
   getFirestore,
@@ -26,6 +28,8 @@ import {
   updateDoc,
   deleteDoc,
   collection,
+  addDoc,
+  getDocs,
   query,
   where,
   onSnapshot,
@@ -92,47 +96,127 @@ export function logout() {
   return auth ? signOut(auth) : Promise.resolve();
 }
 
-// ---------- İzin listesi (sunucu tarafı, kişi başına belge) ----------
-// Kullanıcı yalnızca kendi kaydını okuyabilir; tüm listeyi yalnızca yöneticiler görür.
-
-// { allowed: boolean, admin: boolean }
-export async function checkAccess(email) {
-  const ref = doc(db, 'allowlist', email);
-  try {
-    const snap = await getDoc(ref);
-    if (snap.exists()) return { allowed: true, admin: snap.data().admin === true };
-    // Kural okumaya izin verdi ama kayıt yok: bu yalnızca uygulama sahibi için olur.
-    // Sahibin kaydını oluştur ki yönetici listesinde görünsün.
-    await setDoc(ref, { admin: true, addedBy: email, addedAt: serverTimestamp() }).catch(() => {});
-    return { allowed: true, admin: true };
-  } catch (err) {
-    if (err?.code === 'permission-denied') return { allowed: false, admin: false };
-    throw err;
-  }
+// ---------- Hesap durumu: rol ve askı ----------
+// { role: 'admin' | 'moderator' | 'user', ban: { reason } | null }
+export async function fetchAccountStatus(email, ownerEmail) {
+  const [banSnap, roleSnap] = await Promise.all([
+    getDoc(doc(db, 'bans', email)),
+    getDoc(doc(db, 'roles', email)),
+  ]);
+  const role =
+    email === ownerEmail ? 'admin' : roleSnap.exists() && roleSnap.data().role === 'moderator' ? 'moderator' : 'user';
+  return { role, ban: banSnap.exists() ? banSnap.data() : null };
 }
 
-export function subscribeAllowlist(callback, onError) {
+// ---------- Roller (yalnızca admin) ----------
+export function subscribeRoles(callback, onError) {
   return onSnapshot(
-    collection(db, 'allowlist'),
-    (snap) => {
-      const entries = [];
-      snap.forEach((d) => entries.push({ email: d.id, admin: d.data().admin === true }));
-      entries.sort((a, b) => a.email.localeCompare(b.email));
-      callback(entries);
-    },
-    (err) => {
-      console.warn('İzin listesi dinlenemedi:', err);
-      onError?.(err);
-    }
+    collection(db, 'roles'),
+    (snap) => callback(snap.docs.map((d) => ({ email: d.id, ...d.data() }))),
+    onError
   );
 }
 
-export function addAllowedEmail(email, addedBy, admin = false) {
-  return setDoc(doc(db, 'allowlist', email), { admin, addedBy, addedAt: serverTimestamp() });
+export function grantModerator(email, grantedBy) {
+  return setDoc(doc(db, 'roles', email), { role: 'moderator', grantedBy, grantedAt: serverTimestamp() });
 }
 
-export function removeAllowedEmail(email) {
-  return deleteDoc(doc(db, 'allowlist', email));
+export function revokeRole(email) {
+  return deleteDoc(doc(db, 'roles', email));
+}
+
+// ---------- Askıya alma (moderatör / admin) ----------
+export function subscribeBans(callback, onError) {
+  return onSnapshot(
+    collection(db, 'bans'),
+    (snap) => callback(snap.docs.map((d) => ({ email: d.id, ...d.data() }))),
+    onError
+  );
+}
+
+export function banUser(email, reason, by) {
+  return setDoc(doc(db, 'bans', email), { reason: (reason || '').slice(0, 500), by, at: serverTimestamp() });
+}
+
+export function unbanUser(email) {
+  return deleteDoc(doc(db, 'bans', email));
+}
+
+// ---------- Engelleme ----------
+export function subscribeBlocks(me, callback) {
+  return onSnapshot(
+    collection(db, 'blocks', me, 'list'),
+    (snap) => callback(new Set(snap.docs.map((d) => d.id))),
+    (err) => console.warn('Engel listesi dinlenemedi:', err?.code)
+  );
+}
+
+export function blockUser(me, email) {
+  return setDoc(doc(db, 'blocks', me, 'list', email), { at: serverTimestamp() });
+}
+
+export function unblockUser(me, email) {
+  return deleteDoc(doc(db, 'blocks', me, 'list', email));
+}
+
+// ---------- Şikâyetler ----------
+export function createReport({ reporter, reported, reason, details, evidence }) {
+  return addDoc(collection(db, 'reports'), {
+    reporter,
+    reported,
+    reason,
+    details: (details || '').slice(0, 1000),
+    evidence: (evidence || []).slice(0, 20),
+    status: 'open',
+    createdAt: serverTimestamp(),
+  });
+}
+
+export function subscribeOpenReports(callback, onError) {
+  return onSnapshot(
+    query(collection(db, 'reports'), where('status', '==', 'open')),
+    (snap) =>
+      callback(
+        snap.docs
+          .map((d) => ({ id: d.id, ...d.data() }))
+          .sort((a, b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0))
+      ),
+    onError
+  );
+}
+
+export function resolveReport(id, status, resolution, by) {
+  return updateDoc(doc(db, 'reports', id), {
+    status,
+    resolution: (resolution || '').slice(0, 500),
+    resolvedBy: by,
+    resolvedAt: serverTimestamp(),
+  });
+}
+
+// ---------- Hesap silme ----------
+// Sunucudaki profil, kişi kodu, taşıma paketi ve bekleyen tüm mesajlar silinir; ardından Google oturumu
+// Firebase'den kaldırılır. Son giriş eskiyse Google tekrar giriş ister.
+export async function deleteAccount(email, code) {
+  for (const field of ['to', 'from']) {
+    const snap = await getDocs(query(collection(db, 'messages'), where(field, '==', email)));
+    for (const d of snap.docs) {
+      await deleteMessageFromServer(d.id, d.data().media?.chunks || 0).catch(() => {});
+    }
+  }
+  await deleteDoc(doc(db, 'transfers', email)).catch(() => {});
+  await deleteDoc(doc(db, 'users', email)).catch(() => {});
+  if (code) await deleteDoc(doc(db, 'codes', code)).catch(() => {});
+
+  const user = auth.currentUser;
+  if (!user) return;
+  try {
+    await deleteUser(user);
+  } catch (err) {
+    if (err?.code !== 'auth/requires-recent-login') throw err;
+    await reauthenticateWithPopup(user, new GoogleAuthProvider());
+    await deleteUser(user);
+  }
 }
 
 // ---------- Kişi kodları ve profiller ----------
@@ -159,7 +243,8 @@ export async function fetchMyProfile(email) {
 }
 
 // Profili yayınlar. code verilmezse yeni bir kod alır (çakışırsa tekrar dener).
-export async function publishProfile({ email, displayName, publicKey, code, discoverable }) {
+// termsAcceptedAt: mevcut Timestamp ya da 'now' (yeni onay)
+export async function publishProfile({ email, displayName, publicKey, code, discoverable, termsVersion, termsAcceptedAt }) {
   const name = (displayName || '').slice(0, 80);
   const publicPart = { email, displayName: name, publicKey, updatedAt: serverTimestamp() };
   let finalCode = code;
@@ -182,6 +267,8 @@ export async function publishProfile({ email, displayName, publicKey, code, disc
     ...publicPart,
     code: finalCode,
     discoverable: Boolean(discoverable),
+    termsVersion,
+    termsAcceptedAt: !termsAcceptedAt || termsAcceptedAt === 'now' ? serverTimestamp() : termsAcceptedAt,
   });
   return finalCode;
 }

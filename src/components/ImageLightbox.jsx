@@ -1,8 +1,16 @@
 // napisen - Tam Ekran Görsel İnceleyici (Lightbox)
-import React from 'react';
+import React, { useEffect } from 'react';
 import { X, Download, Shield } from 'lucide-react';
 
-export default function ImageLightbox({ imageUrl, onClose }) {
+const EXT = { 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp', 'image/svg+xml': 'svg' };
+
+export default function ImageLightbox({ imageUrl, mimeType, onClose }) {
+  useEffect(() => {
+    const onKey = (e) => e.key === 'Escape' && onClose();
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
   if (!imageUrl) return null;
 
   return (
@@ -11,13 +19,13 @@ export default function ImageLightbox({ imageUrl, onClose }) {
       <div className="absolute top-4 left-4 right-4 flex items-center justify-between text-white/80">
         <div className="flex items-center gap-2 text-xs text-[#00a884]">
           <Shield className="h-4 w-4" />
-          <span>Şifrelenmiş Medya (Yalnızca Cihazınızda)</span>
+          <span>Uçtan uca şifreli medya</span>
         </div>
 
         <div className="flex items-center gap-3">
           <a
             href={imageUrl}
-            download="napisen_photo.jpg"
+            download={`napisen_${Date.now()}.${EXT[mimeType] || 'jpg'}`}
             className="flex h-9 w-9 items-center justify-center rounded-full bg-white/10 hover:bg-white/20 transition text-white"
             title="İndir"
           >

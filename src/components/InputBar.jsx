@@ -1,78 +1,95 @@
 // napisen - Mesaj Giriş ve Ses Kayıt Çubuğu
-import React, { useState, useRef } from 'react';
-import { Send, Mic, Paperclip, Trash2, Check, Smile, Image as ImageIcon } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { Send, Mic, Paperclip, Trash2, Lock } from 'lucide-react';
 import { audioRecorder } from '../services/audio';
+import { prepareImage } from '../services/media';
+import { MAX_TEXT_LENGTH } from '../hooks/useMessenger';
 
-export default function InputBar({ onSendText, onSendAudio, onSendImage }) {
+export default function InputBar({ disabled, onSendText, onSendAudio, onSendImage, onError }) {
   const [text, setText] = useState('');
   const [isRecording, setIsRecording] = useState(false);
   const [recordSeconds, setRecordSeconds] = useState(0);
+  const [preparing, setPreparing] = useState(false);
   const fileInputRef = useRef(null);
+  const stoppingRef = useRef(false);
 
-  // Metin Gönderme
+  // Bileşen kapanırsa mikrofonu mutlaka serbest bırak
+  useEffect(() => () => audioRecorder.cancelRecording(), []);
+
   const handleSendText = (e) => {
     if (e) e.preventDefault();
-    if (!text.trim()) return;
-    onSendText(text.trim());
+    const clean = text.trim();
+    if (!clean || disabled) return;
+    if (clean.length > MAX_TEXT_LENGTH) {
+      onError?.(`Mesaj en fazla ${MAX_TEXT_LENGTH} karakter olabilir.`);
+      return;
+    }
+    onSendText(clean);
     setText('');
   };
 
   const handleKeyDown = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
       handleSendText();
     }
   };
 
-  // Ses Kaydı Başlatma
+  const handleStopAndSendRecord = async () => {
+    if (stoppingRef.current) return;
+    stoppingRef.current = true;
+    try {
+      const audioData = await audioRecorder.stopRecording();
+      if (audioData?.blob?.size) onSendAudio(audioData.blob, audioData.duration);
+    } catch (err) {
+      console.error('Ses kaydı durdurulamadı:', err);
+      onError?.('Ses kaydı tamamlanamadı.');
+    } finally {
+      stoppingRef.current = false;
+      setIsRecording(false);
+      setRecordSeconds(0);
+    }
+  };
+
   const handleStartRecord = async () => {
+    if (disabled) return;
     try {
       setRecordSeconds(0);
       setIsRecording(true);
-      await audioRecorder.startRecording((sec) => {
-        setRecordSeconds(sec);
-      });
+      await audioRecorder.startRecording(setRecordSeconds, () => handleStopAndSendRecord());
     } catch (err) {
-      alert('Mikrofon erişim izni verilmedi veya desteklenmiyor.');
+      console.error(err);
+      onError?.(
+        err?.name === 'NotAllowedError'
+          ? 'Mikrofon izni verilmedi.'
+          : err?.message || 'Ses kaydı bu cihazda desteklenmiyor.'
+      );
       setIsRecording(false);
     }
   };
 
-  // Ses Kaydını Bitir ve Gönder
-  const handleStopAndSendRecord = async () => {
-    try {
-      const audioData = await audioRecorder.stopRecording();
-      setIsRecording(false);
-      setRecordSeconds(0);
-      if (audioData && audioData.blob) {
-        onSendAudio(audioData.blob, audioData.duration);
-      }
-    } catch (err) {
-      console.error('Ses kaydı durdurulamadı:', err);
-      setIsRecording(false);
-    }
-  };
-
-  // Ses Kaydını İptal Et (Çöpe at)
   const handleCancelRecord = () => {
     audioRecorder.cancelRecording();
     setIsRecording(false);
     setRecordSeconds(0);
   };
 
-  // Görsel Seçme
-  const handleFileChange = (e) => {
+  const handleFileChange = async (e) => {
     const file = e.target.files?.[0];
+    if (fileInputRef.current) fileInputRef.current.value = '';
     if (!file) return;
-
     if (!file.type.startsWith('image/')) {
-      alert('Lütfen yalnızca fotoğraf veya görsel dosyası seçin.');
+      onError?.('Lütfen yalnızca fotoğraf veya görsel dosyası seçin.');
       return;
     }
-
-    onSendImage(file);
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
+    setPreparing(true);
+    try {
+      const prepared = await prepareImage(file);
+      onSendImage(prepared);
+    } catch (err) {
+      onError?.(err.message || 'Görsel hazırlanamadı.');
+    } finally {
+      setPreparing(false);
     }
   };
 
@@ -93,8 +110,11 @@ export default function InputBar({ onSendText, onSendAudio, onSendImage }) {
         className="hidden"
       />
 
-      {/* SES KAYDI CANLI GÖRÜNÜMÜ */}
-      {isRecording ? (
+      {disabled ? (
+        <div className="flex h-12 items-center justify-center gap-2 text-xs text-[#8696a0]">
+          <Lock className="h-3.5 w-3.5" /> Mesaj göndermek için önce kişiyi doğrulayın
+        </div>
+      ) : isRecording ? (
         <div className="flex h-12 items-center justify-between gap-3 px-2">
           {/* İptal Butonu */}
           <button
@@ -132,6 +152,7 @@ export default function InputBar({ onSendText, onSendAudio, onSendImage }) {
           {/* Görsel Ekle Butonu */}
           <button
             onClick={() => fileInputRef.current?.click()}
+            disabled={preparing}
             className="flex h-10 w-10 items-center justify-center rounded-full text-[#8696a0] hover:text-[#e9edef] hover:bg-[#374248] transition cursor-pointer"
             title="Fotoğraf Gönder"
           >
@@ -145,7 +166,8 @@ export default function InputBar({ onSendText, onSendAudio, onSendImage }) {
               value={text}
               onChange={(e) => setText(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="Bir mesaj yazın..."
+              placeholder={preparing ? 'Görsel hazırlanıyor...' : 'Bir mesaj yazın...'}
+              maxLength={MAX_TEXT_LENGTH}
               className="w-full rounded-xl bg-[#2a3942] py-2.5 px-4 text-sm text-[#e9edef] placeholder-[#8696a0] focus:outline-none focus:ring-1 focus:ring-[#00a884]"
             />
           </div>

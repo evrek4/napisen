@@ -1,5 +1,8 @@
-// napisen - Ses Kaydı ve Oynatma Servisi
-// Mikrofon erişimi, ses kaydı, süre ölçümü ve ses dalgası analizi
+// napisen - Ses Kaydı Servisi
+
+import { MAX_AUDIO_SECONDS } from './media';
+
+const MIME_CANDIDATES = ['audio/webm;codecs=opus', 'audio/mp4', 'audio/ogg;codecs=opus', 'audio/webm'];
 
 class AudioRecorderService {
   constructor() {
@@ -10,94 +13,85 @@ class AudioRecorderService {
     this.timerInterval = null;
   }
 
-  // Mikrofon izni al ve kayda başla
-  async startRecording(onTick) {
-    this.audioChunks = [];
-    try {
-      this.stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
-      });
-
-      // Desteklenen mime type seçimi
-      let mimeType = 'audio/webm';
-      if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
-        mimeType = 'audio/webm;codecs=opus';
-      } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
-        mimeType = 'audio/mp4';
-      } else if (MediaRecorder.isTypeSupported('audio/ogg')) {
-        mimeType = 'audio/ogg';
-      }
-
-      this.mediaRecorder = new MediaRecorder(this.stream, { mimeType });
-
-      this.mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          this.audioChunks.push(event.data);
-        }
-      };
-
-      this.startTime = Date.now();
-      if (onTick) {
-        this.timerInterval = setInterval(() => {
-          const seconds = Math.floor((Date.now() - this.startTime) / 1000);
-          onTick(seconds);
-        }, 500);
-      }
-
-      this.mediaRecorder.start(100); // 100ms parçalar
-      return true;
-    } catch (error) {
-      console.error('Mikrofon başlatma hatası:', error);
-      throw error;
-    }
+  get isActive() {
+    return Boolean(this.mediaRecorder && this.mediaRecorder.state !== 'inactive');
   }
 
-  // Kaydı durdur ve Blob nesnesini döndür
-  async stopRecording() {
+  // onTick(saniye), onLimit(): süre sınırına ulaşıldığında çağrılır
+  async startRecording(onTick, onLimit) {
+    if (this.isActive) this.cancelRecording();
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      throw new Error('Bu tarayıcı ses kaydını desteklemiyor.');
+    }
+
+    this.audioChunks = [];
+    this.stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    });
+
+    const mimeType = MIME_CANDIDATES.find((t) => MediaRecorder.isTypeSupported?.(t));
+    try {
+      this.mediaRecorder = mimeType ? new MediaRecorder(this.stream, { mimeType }) : new MediaRecorder(this.stream);
+    } catch (err) {
+      this._releaseStream();
+      throw err;
+    }
+
+    this.mediaRecorder.ondataavailable = (event) => {
+      if (event.data.size > 0) this.audioChunks.push(event.data);
+    };
+
+    this.startTime = Date.now();
+    this.timerInterval = setInterval(() => {
+      const seconds = Math.floor((Date.now() - this.startTime) / 1000);
+      onTick?.(seconds);
+      if (seconds >= MAX_AUDIO_SECONDS) onLimit?.();
+    }, 500);
+
+    this.mediaRecorder.start(250);
+    return true;
+  }
+
+  stopRecording() {
     return new Promise((resolve) => {
-      if (!this.mediaRecorder) {
+      clearInterval(this.timerInterval);
+      const recorder = this.mediaRecorder;
+      if (!recorder || recorder.state === 'inactive') {
+        this._releaseStream();
         resolve(null);
         return;
       }
-
-      clearInterval(this.timerInterval);
-      const durationSeconds = Math.max(1, Math.round((Date.now() - this.startTime) / 1000));
-
-      this.mediaRecorder.onstop = () => {
-        const mimeType = this.mediaRecorder.mimeType || 'audio/webm';
-        const audioBlob = new Blob(this.audioChunks, { type: mimeType });
-
-        // Mikrofon akışını kapat
-        if (this.stream) {
-          this.stream.getTracks().forEach((track) => track.stop());
-        }
-
-        resolve({
-          blob: audioBlob,
-          duration: durationSeconds,
-        });
+      const duration = Math.max(1, Math.round((Date.now() - this.startTime) / 1000));
+      recorder.onstop = () => {
+        const type = recorder.mimeType || 'audio/webm';
+        const blob = new Blob(this.audioChunks, { type });
+        this._releaseStream();
+        this.mediaRecorder = null;
+        this.audioChunks = [];
+        resolve({ blob, duration });
       };
-
-      this.mediaRecorder.stop();
+      recorder.stop();
     });
   }
 
-  // Kaydı iptal et (göndermeden sil)
   cancelRecording() {
     clearInterval(this.timerInterval);
-    if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
-      this.mediaRecorder.stop();
+    if (this.mediaRecorder) {
+      this.mediaRecorder.ondataavailable = null;
+      this.mediaRecorder.onstop = null;
+      if (this.mediaRecorder.state !== 'inactive') this.mediaRecorder.stop();
     }
+    this.mediaRecorder = null;
+    this.audioChunks = [];
+    this._releaseStream();
+  }
+
+  _releaseStream() {
     if (this.stream) {
       this.stream.getTracks().forEach((track) => track.stop());
+      this.stream = null;
     }
-    this.audioChunks = [];
   }
 }
 
 export const audioRecorder = new AudioRecorderService();
-

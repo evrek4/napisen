@@ -1,19 +1,19 @@
 {
   "name": "napisen",
   "short_name": "napisen",
-  "description": "Uçtan Uca Şifreli, Sunucusuz Cihaz İçi Depolamalı Mesajlaşma",
+  "description": "Uçtan uca şifreli, yalnızca davetlilere açık mesajlaşma",
+  "id": "/",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
   "background_color": "#0b141a",
   "theme_color": "#0b141a",
   "orientation": "portrait-primary",
+  "lang": "tr",
   "icons": [
-    {
-      "src": "/logo.svg",
-      "sizes": "192x192 512x512",
-      "type": "image/svg+xml",
-      "purpose": "any maskable"
-    }
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "/logo.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
   ]
 }
-

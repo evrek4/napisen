@@ -1,148 +1,195 @@
 // napisen - Uçtan Uca Şifreleme (E2EE) Modülü
-// Web Crypto API (AES-GCM 256-bit) standardını kullanır.
-// Hiçbir açık metin, ses kaydı veya resim cihazdan şifrelenmeden çıkmaz.
+//
+// Model:
+// - Her cihaz ilk kurulumda kendi ECDH P-256 anahtar çiftini üretir. Özel anahtar cihazdan çıkmaz
+//   (yalnızca kullanıcı kendi yeni cihazına şifreli olarak taşıyabilir).
+// - Açık anahtar Firestore'da yayınlanır; ancak gönderim yapılabilmesi için karşı tarafın anahtarı
+//   yüz yüze QR okutarak (veya güvenlik numarası karşılaştırılarak) DOĞRULANMIŞ olmalıdır.
+// - İki kişi arasındaki sohbet anahtarı: ECDH(benim özel, onun açık) -> HKDF-SHA256 -> AES-GCM-256.
+// - Her şifreleme benzersiz 12 baytlık IV ve mesaja bağlı ek doğrulama verisi (AAD) kullanır;
+//   böylece bir mesajın şifreli içeriği başka bir mesajın yerine konamaz.
 
-// ArrayBuffer'ı Base64 dizgesine çevirme
-export function arrayBufferToBase64(buffer) {
+const subtle = globalThis.crypto.subtle;
+const enc = new TextEncoder();
+const dec = new TextDecoder();
+
+const ECDH = { name: 'ECDH', namedCurve: 'P-256' };
+
+// ---------- Base64 yardımcıları ----------
+export function bytesToBase64(bytes) {
+  const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
   let binary = '';
-  const bytes = new Uint8Array(buffer);
-  const len = bytes.byteLength;
-  for (let i = 0; i < len; i++) {
-    binary += String.fromCharCode(bytes[i]);
+  const CHUNK = 0x8000;
+  for (let i = 0; i < u8.length; i += CHUNK) {
+    binary += String.fromCharCode.apply(null, u8.subarray(i, i + CHUNK));
   }
-  return window.btoa(binary);
+  return btoa(binary);
 }
 
-// Base64 dizgesini ArrayBuffer'a çevirme
-export function base64ToArrayBuffer(base64) {
-  const binary_string = window.atob(base64);
-  const len = binary_string.length;
-  const bytes = new Uint8Array(len);
-  for (let i = 0; i < len; i++) {
-    bytes[i] = binary_string.charCodeAt(i);
-  }
-  return bytes.buffer;
+export function base64ToBytes(b64) {
+  const binary = atob(b64);
+  const out = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
+  return out;
 }
 
-// İki kullanıcı arasındaki konuşma için deterministik ortak anahtar türetme
-export async function deriveSharedKey(userEmail1, userEmail2) {
-  const emails = [userEmail1.toLowerCase(), userEmail2.toLowerCase()].sort();
-  const roomSecret = `napisen_e2ee_${emails[0]}_<->_${emails[1]}`;
+const toB64Url = (b64) => b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const fromB64Url = (s) => {
+  const b64 = s.replace(/-/g, '+').replace(/_/g, '/');
+  return b64 + '='.repeat((4 - (b64.length % 4)) % 4);
+};
 
-  const enc = new TextEncoder();
-  const keyMaterial = await window.crypto.subtle.importKey(
-    'raw',
-    enc.encode(roomSecret),
-    { name: 'PBKDF2' },
-    false,
-    ['deriveKey']
-  );
+export const normalizeEmail = (email) => (email || '').trim().toLowerCase();
 
-  const salt = enc.encode('napisen_secure_salt_2026');
+// ---------- Kimlik anahtarları ----------
+// Özel anahtar "extractable" üretilir; yalnızca şifreli cihaz taşıma işleminde dışa aktarılır.
+export async function generateIdentityKeyPair() {
+  return subtle.generateKey(ECDH, true, ['deriveBits']);
+}
 
-  return window.crypto.subtle.deriveKey(
-    {
-      name: 'PBKDF2',
-      salt: salt,
-      iterations: 100000,
-      hash: 'SHA-256',
-    },
-    keyMaterial,
+export async function exportPublicKey(publicKey) {
+  return bytesToBase64(await subtle.exportKey('raw', publicKey));
+}
+
+export async function importPublicKey(b64) {
+  const raw = base64ToBytes(b64);
+  if (raw.length !== 65 || raw[0] !== 0x04) {
+    throw new Error('Geçersiz açık anahtar.');
+  }
+  return subtle.importKey('raw', raw, ECDH, true, []);
+}
+
+export async function exportPrivateKeyJwk(privateKey) {
+  return subtle.exportKey('jwk', privateKey);
+}
+
+export async function importPrivateKeyJwk(jwk) {
+  return subtle.importKey('jwk', jwk, ECDH, true, ['deriveBits']);
+}
+
+async function hkdfAesKey(sharedBits, salt, info) {
+  const base = await subtle.importKey('raw', sharedBits, 'HKDF', false, ['deriveKey']);
+  return subtle.deriveKey(
+    { name: 'HKDF', hash: 'SHA-256', salt: enc.encode(salt), info: enc.encode(info) },
+    base,
     { name: 'AES-GCM', length: 256 },
     false,
     ['encrypt', 'decrypt']
   );
 }
 
-// Düz metin veya JSON şifreleme
-export async function encryptPayload(key, rawData) {
-  const enc = new TextEncoder();
-  const encodedData = typeof rawData === 'string' ? enc.encode(rawData) : enc.encode(JSON.stringify(rawData));
-
-  // Her mesaj için benzersiz 12 bayt IV (Initialization Vector)
-  const iv = window.crypto.getRandomValues(new Uint8Array(12));
-
-  const cipherBuffer = await window.crypto.subtle.encrypt(
-    {
-      name: 'AES-GCM',
-      iv: iv,
-    },
-    key,
-    encodedData
-  );
-
-  return {
-    iv: arrayBufferToBase64(iv.buffer),
-    ciphertext: arrayBufferToBase64(cipherBuffer),
-    timestamp: Date.now(),
-  };
+// İki kullanıcı arasındaki sohbet anahtarı (her iki tarafta da aynı sonucu verir)
+export async function deriveConversationKey(myPrivateKey, theirPublicKeyB64, emailA, emailB) {
+  const theirPublic = await importPublicKey(theirPublicKeyB64);
+  const bits = await subtle.deriveBits({ name: 'ECDH', public: theirPublic }, myPrivateKey, 256);
+  const salt = [normalizeEmail(emailA), normalizeEmail(emailB)].sort().join('\n');
+  return hkdfAesKey(bits, salt, 'napisen/v1/conversation');
 }
 
-// Şifreli metin veya JSON'u çözme
-export async function decryptPayload(key, encryptedPackage) {
-  try {
-    const iv = base64ToArrayBuffer(encryptedPackage.iv);
-    const ciphertext = base64ToArrayBuffer(encryptedPackage.ciphertext);
+// ---------- Simetrik şifreleme ----------
+export async function encryptBytes(key, data, aad) {
+  const iv = globalThis.crypto.getRandomValues(new Uint8Array(12));
+  const ct = await subtle.encrypt(
+    { name: 'AES-GCM', iv, additionalData: enc.encode(aad) },
+    key,
+    data
+  );
+  return { iv: bytesToBase64(iv), data: new Uint8Array(ct) };
+}
 
-    const decryptedBuffer = await window.crypto.subtle.decrypt(
-      {
-        name: 'AES-GCM',
-        iv: new Uint8Array(iv),
-      },
-      key,
-      ciphertext
-    );
+export async function decryptBytes(key, ivB64, data, aad) {
+  const pt = await subtle.decrypt(
+    { name: 'AES-GCM', iv: base64ToBytes(ivB64), additionalData: enc.encode(aad) },
+    key,
+    data
+  );
+  return new Uint8Array(pt);
+}
 
-    const dec = new TextDecoder();
-    const decodedString = dec.decode(decryptedBuffer);
+export async function encryptJSON(key, obj, aad) {
+  const { iv, data } = await encryptBytes(key, enc.encode(JSON.stringify(obj)), aad);
+  return { iv, ct: bytesToBase64(data) };
+}
 
-    try {
-      return JSON.parse(decodedString);
-    } catch {
-      return decodedString;
-    }
-  } catch (error) {
-    console.error('Şifre çözme hatası:', error);
-    throw new Error('Mesaj şifresi çözülemedi. Anahtar eşleşmiyor olabilir.');
+export async function decryptJSON(key, pkg, aad) {
+  const pt = await decryptBytes(key, pkg.iv, base64ToBytes(pkg.ct), aad);
+  return JSON.parse(dec.decode(pt));
+}
+
+// ---------- Güvenlik numarası ve parmak izi ----------
+// İki tarafta da aynı çıkan 60 haneli numara (12 grup x 5 hane). Telefonla veya yüz yüze karşılaştırılır.
+export async function computeSafetyNumber(emailA, pubA, emailB, pubB) {
+  const parts = [
+    [normalizeEmail(emailA), pubA],
+    [normalizeEmail(emailB), pubB],
+  ].sort((x, y) => (x[0] < y[0] ? -1 : 1));
+  const input = enc.encode(`napisen-safety-v1|${parts[0][0]}|${parts[0][1]}|${parts[1][0]}|${parts[1][1]}`);
+  const hash = new Uint8Array(await subtle.digest('SHA-512', input));
+  const groups = [];
+  for (let i = 0; i < 12; i++) {
+    const o = i * 5;
+    const n =
+      (hash[o] * 2 ** 32 + hash[o + 1] * 2 ** 24 + hash[o + 2] * 2 ** 16 + hash[o + 3] * 2 ** 8 + hash[o + 4]) %
+      100000;
+    groups.push(String(n).padStart(5, '0'));
   }
+  return groups;
 }
 
-// Medya (Resim / Ses Blob'u) şifreleme
-export async function encryptMediaBlob(key, blob) {
-  const arrayBuffer = await blob.arrayBuffer();
-  const iv = window.crypto.getRandomValues(new Uint8Array(12));
-
-  const cipherBuffer = await window.crypto.subtle.encrypt(
-    {
-      name: 'AES-GCM',
-      iv: iv,
-    },
-    key,
-    arrayBuffer
-  );
-
-  return {
-    iv: arrayBufferToBase64(iv.buffer),
-    ciphertext: arrayBufferToBase64(cipherBuffer),
-    mimeType: blob.type,
-    size: blob.size,
-  };
+export async function publicKeyFingerprint(pubB64) {
+  const hash = new Uint8Array(await subtle.digest('SHA-256', base64ToBytes(pubB64)));
+  return Array.from(hash.slice(0, 8))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('')
+    .toUpperCase()
+    .match(/.{4}/g)
+    .join(' ');
 }
 
-// Şifreli medya paketini yerel Blob'a geri dönüştürme
-export async function decryptMediaBlob(key, encryptedPackage) {
-  const iv = base64ToArrayBuffer(encryptedPackage.iv);
-  const ciphertext = base64ToArrayBuffer(encryptedPackage.ciphertext);
-
-  const decryptedBuffer = await window.crypto.subtle.decrypt(
-    {
-      name: 'AES-GCM',
-      iv: new Uint8Array(iv),
-    },
-    key,
-    ciphertext
-  );
-
-  return new Blob([decryptedBuffer], { type: encryptedPackage.mimeType });
+// ---------- QR kod içerikleri ----------
+// Kişi doğrulama kodu: napisen:v1:<email>:<açık anahtar (base64url)>
+export function encodeVerifyCode(email, pubB64) {
+  return `napisen:v1:${normalizeEmail(email)}:${toB64Url(pubB64)}`;
 }
 
+export function decodeVerifyCode(text) {
+  const m = /^napisen:v1:([^:\s]+@[^:\s]+):([A-Za-z0-9_-]+)$/.exec((text || '').trim());
+  if (!m) return null;
+  return { email: normalizeEmail(m[1]), publicKey: fromB64Url(m[2]) };
+}
+
+// Cihaz taşıma kodu: napisen-transfer:v1:<email>:<geçici açık anahtar>
+export function encodeTransferCode(email, ephPubB64) {
+  return `napisen-transfer:v1:${normalizeEmail(email)}:${toB64Url(ephPubB64)}`;
+}
+
+export function decodeTransferCode(text) {
+  const m = /^napisen-transfer:v1:([^:\s]+@[^:\s]+):([A-Za-z0-9_-]+)$/.exec((text || '').trim());
+  if (!m) return null;
+  return { email: normalizeEmail(m[1]), ephPub: fromB64Url(m[2]) };
+}
+
+// ---------- Cihaz taşıma (eski cihaz -> yeni cihaz) ----------
+// Yeni cihaz geçici bir anahtar üretip QR gösterir; eski cihaz okutur, kimlik anahtarını
+// bu geçici anahtara şifreler. Sunucu yalnızca şifreli paketi görür.
+async function transferKey(myEphPrivate, theirEphPubB64, email) {
+  const theirPub = await importPublicKey(theirEphPubB64);
+  const bits = await subtle.deriveBits({ name: 'ECDH', public: theirPub }, myEphPrivate, 256);
+  return hkdfAesKey(bits, normalizeEmail(email), 'napisen/v1/device-transfer');
+}
+
+export async function sealTransfer(email, newDeviceEphPubB64, secretObj) {
+  const eph = await subtle.generateKey(ECDH, true, ['deriveBits']);
+  const key = await transferKey(eph.privateKey, newDeviceEphPubB64, email);
+  const pkg = await encryptJSON(key, secretObj, `transfer|${normalizeEmail(email)}`);
+  return { oldPub: await exportPublicKey(eph.publicKey), ...pkg };
+}
+
+export async function openTransfer(email, myEphPrivate, sealed) {
+  const key = await transferKey(myEphPrivate, sealed.oldPub, email);
+  return decryptJSON(key, sealed, `transfer|${normalizeEmail(email)}`);
+}
+
+export async function generateEphemeralKeyPair() {
+  return subtle.generateKey(ECDH, false, ['deriveBits']);
+}

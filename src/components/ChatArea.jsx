@@ -8,21 +8,26 @@ import {
   Lock,
   HardDrive,
   Cloud,
+  ShieldAlert,
+  ShieldCheck,
+  ShieldQuestion,
 } from 'lucide-react';
 import MessageBubble from './MessageBubble';
 import InputBar from './InputBar';
 
 export default function ChatArea({
   activeContact,
-  currentUser,
   messages,
   preferences,
   onTogglePreference,
   onBack,
+  onVerify,
   onSendText,
   onSendAudio,
   onSendImage,
+  onRetry,
   onImageClick,
+  onError,
 }) {
   const messagesEndRef = useRef(null);
 
@@ -32,7 +37,7 @@ export default function ChatArea({
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages]);
+  }, [messages.length]);
 
   if (!activeContact) {
     return (
@@ -62,13 +67,15 @@ export default function ChatArea({
     );
   }
 
-  const initial = activeContact.name ? activeContact.name[0].toUpperCase() : activeContact.email[0].toUpperCase();
+  const initial = (activeContact.name || activeContact.email)[0].toUpperCase();
+  const keyStatus = activeContact.keyStatus;
+  const canSend = keyStatus === 'verified';
 
   return (
     <div className="flex flex-1 flex-col h-full bg-[#0b141a] overflow-hidden select-none">
       {/* ÜST SOHBET BAŞLIĞI */}
       <div className="flex h-16 items-center justify-between bg-[#202c33] px-3 md:px-4 py-2 border-b border-[#222d34] shrink-0">
-        <div className="flex items-center gap-3">
+        <div className="flex min-w-0 items-center gap-3">
           {/* Mobil Geri Butonu */}
           <button
             onClick={onBack}
@@ -87,20 +94,41 @@ export default function ChatArea({
             <span className="text-sm font-semibold text-[#e9edef] truncate">
               {activeContact.name || activeContact.email.split('@')[0]}
             </span>
-            <span className="flex items-center gap-1 text-[11px] text-[#00a884] font-mono">
-              <Lock className="h-2.5 w-2.5" />
-              <span>{activeContact.email}</span>
-            </span>
+            <button
+              onClick={onVerify}
+              className={`flex items-center gap-1 text-[11px] font-mono truncate cursor-pointer hover:underline ${
+                keyStatus === 'verified' ? 'text-[#00a884]' : keyStatus === 'changed' ? 'text-red-400' : 'text-amber-400'
+              }`}
+              title="Güvenlik doğrulaması"
+            >
+              {keyStatus === 'verified' ? (
+                <ShieldCheck className="h-3 w-3 shrink-0" />
+              ) : keyStatus === 'changed' ? (
+                <ShieldAlert className="h-3 w-3 shrink-0" />
+              ) : (
+                <ShieldQuestion className="h-3 w-3 shrink-0" />
+              )}
+              <span className="truncate">
+                {keyStatus === 'verified'
+                  ? 'Doğrulandı'
+                  : keyStatus === 'changed'
+                    ? 'Anahtar değişti!'
+                    : keyStatus === 'no-key'
+                      ? 'Henüz giriş yapmadı'
+                      : 'Doğrulanmadı'}
+              </span>
+            </button>
           </div>
         </div>
 
         {/* HIZLI GİZLİLİK BUTONLARI (KULLANICININ İSTEDİĞİ İKİ SEÇENEK) */}
-        <div className="flex items-center gap-2">
+        <div className="flex shrink-0 items-center gap-2">
           {/* 1. Sunucuda Sakla Rozeti */}
           <button
             onClick={() => onTogglePreference('serverStorageEnabled')}
-            title="Tıkla: Sunucuda Sakla seçeneğini değiştir"
-            className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] font-medium border transition cursor-pointer ${
+            title={`Sunucuda sakla: ${preferences.serverStorageEnabled ? 'açık' : 'kapalı (teslimde silinir)'} — değiştirmek için dokunun`}
+            aria-label="Sunucuda sakla seçeneği"
+            className={`flex items-center gap-1.5 rounded-lg px-2 sm:px-2.5 py-1.5 sm:py-1 text-[11px] font-medium border transition cursor-pointer ${
               preferences.serverStorageEnabled
                 ? 'bg-[#53bdeb]/15 text-[#53bdeb] border-[#53bdeb]/40'
                 : 'bg-[#111b21] text-[#8696a0] border-[#2a3942] hover:text-[#e9edef]'
@@ -108,14 +136,15 @@ export default function ChatArea({
           >
             <Cloud className="h-3 w-3" />
             <span className="hidden sm:inline">Sunucuda:</span>
-            <span>{preferences.serverStorageEnabled ? 'Sakla' : 'Sil (0 Bayt)'}</span>
+            <span className="hidden sm:inline">{preferences.serverStorageEnabled ? 'Sakla' : 'Sil (0 Bayt)'}</span>
           </button>
 
           {/* 2. Yazılar Cihazda Tutulmasın Rozeti */}
           <button
             onClick={() => onTogglePreference('dontStoreOnDevice')}
-            title="Tıkla: Yazılar Cihazda Tutulmasın (Hayalet Mod) seçeneğini değiştir"
-            className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] font-medium border transition cursor-pointer ${
+            title={`Hayalet mod: ${preferences.dontStoreOnDevice ? 'açık' : 'kapalı'} — değiştirmek için dokunun`}
+            aria-label="Hayalet mod seçeneği"
+            className={`flex items-center gap-1.5 rounded-lg px-2 sm:px-2.5 py-1.5 sm:py-1 text-[11px] font-medium border transition cursor-pointer ${
               preferences.dontStoreOnDevice
                 ? 'bg-purple-500/20 text-purple-300 border-purple-500/50'
                 : 'bg-[#111b21] text-[#8696a0] border-[#2a3942] hover:text-[#e9edef]'
@@ -123,7 +152,7 @@ export default function ChatArea({
           >
             <EyeOff className="h-3 w-3" />
             <span className="hidden sm:inline">Cihazda:</span>
-            <span>{preferences.dontStoreOnDevice ? 'Tutulmasın (Hayalet)' : 'Saklanıyor'}</span>
+            <span className="hidden sm:inline">{preferences.dontStoreOnDevice ? 'Tutulmasın (Hayalet)' : 'Saklanıyor'}</span>
           </button>
         </div>
       </div>
@@ -144,6 +173,32 @@ export default function ChatArea({
             </p>
           </div>
 
+          {keyStatus === 'unverified' && (
+            <button
+              onClick={onVerify}
+              className="max-w-md rounded-xl bg-amber-950/60 px-3.5 py-2.5 text-center text-xs text-amber-100 border border-amber-700/50 cursor-pointer hover:bg-amber-900/60"
+            >
+              <ShieldQuestion className="inline h-3.5 w-3.5 mr-1" />
+              Mesaj göndermeden önce {activeContact.name} ile <strong>QR kodlarınızı okutarak</strong> doğrulama
+              yapın. Dokunun.
+            </button>
+          )}
+          {keyStatus === 'changed' && (
+            <button
+              onClick={onVerify}
+              className="max-w-md rounded-xl bg-red-950/70 px-3.5 py-2.5 text-center text-xs text-red-100 border border-red-700/60 cursor-pointer hover:bg-red-900/60"
+            >
+              <ShieldAlert className="inline h-3.5 w-3.5 mr-1" />
+              {activeContact.name} kişisinin güvenlik anahtarı değişti. Yeniden doğrulayana kadar gönderim
+              durduruldu. Dokunun.
+            </button>
+          )}
+          {keyStatus === 'no-key' && (
+            <div className="max-w-md rounded-xl bg-[#182229] px-3.5 py-2 text-center text-xs text-[#8696a0] border border-[#2a3942]">
+              {activeContact.name} henüz uygulamaya giriş yapmadı.
+            </div>
+          )}
+
           {/* Aktif Mod Uyarısı */}
           {preferences.dontStoreOnDevice && (
             <div className="rounded-lg bg-purple-950/50 px-3 py-1 text-[11px] text-purple-200 border border-purple-800/40 flex items-center gap-1.5">
@@ -162,7 +217,7 @@ export default function ChatArea({
 
         {/* MESAJ LİSTESİ */}
         {messages.map((msg) => (
-          <MessageBubble key={msg.id} message={msg} onImageClick={onImageClick} />
+          <MessageBubble key={msg.id} message={msg} onImageClick={onImageClick} onRetry={onRetry} />
         ))}
 
         <div ref={messagesEndRef} />
@@ -170,6 +225,9 @@ export default function ChatArea({
 
       {/* ALT MESAJ VE SES GİRİŞ ÇUBUĞU */}
       <InputBar
+        key={activeContact.email}
+        disabled={!canSend}
+        onError={onError}
         onSendText={onSendText}
         onSendAudio={onSendAudio}
         onSendImage={onSendImage}

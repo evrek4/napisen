@@ -1,0 +1,137 @@
+rules_version = '2';
+
+// napisen - Firestore Güvenlik Kuralları
+// Tüm erişim, Google ile giriş yapmış ve config/allowlist belgesinde kayıtlı e-postalarla sınırlıdır.
+// Mesaj içerikleri uçtan uca şifreli olduğundan sunucu yalnızca şifreli veriyi görür.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null
+        && request.auth.token.email is string
+        && request.auth.token.email_verified == true;
+    }
+
+    function me() {
+      return request.auth.token.email.lower();
+    }
+
+    function allowlistPath() {
+      return /databases/$(database)/documents/config/allowlist;
+    }
+
+    function acl() {
+      return get(allowlistPath()).data;
+    }
+
+    function allowed() {
+      return signedIn() && exists(allowlistPath()) && me() in acl().emails;
+    }
+
+    function isAdmin() {
+      return allowed() && me() in acl().admins;
+    }
+
+    function participant(d) {
+      return d.from == me() || d.to == me();
+    }
+
+    function myPublicKey() {
+      return get(/databases/$(database)/documents/users/$(me())).data.publicKey;
+    }
+
+    // ---------- İzin listesi ----------
+    // İlk kurulumda Firebase Console'dan elle oluşturulur (README'ye bakın).
+    match /config/allowlist {
+      allow get: if allowed();
+      allow update: if isAdmin()
+        && request.resource.data.keys().hasOnly(['emails', 'admins'])
+        && request.resource.data.emails is list
+        && request.resource.data.admins is list
+        && request.resource.data.emails.size() <= 200
+        && request.resource.data.admins.size() > 0
+        && request.resource.data.emails.hasAll(request.resource.data.admins)
+        // Yönetici kendini listeden / yöneticilikten çıkaramaz (kilitlenmeyi önler)
+        && me() in request.resource.data.admins;
+      allow create, delete, list: if false;
+    }
+
+    // ---------- Kullanıcı profilleri / açık anahtarlar ----------
+    match /users/{email} {
+      allow get, list: if allowed();
+      allow create, update: if allowed()
+        && email == me()
+        && request.resource.data.keys().hasOnly(['email', 'displayName', 'publicKey', 'updatedAt'])
+        && request.resource.data.email == me()
+        && request.resource.data.publicKey is string
+        && request.resource.data.publicKey.size() == 88
+        && request.resource.data.displayName is string
+        && request.resource.data.displayName.size() <= 80
+        && request.resource.data.updatedAt == request.time;
+      allow delete: if false;
+    }
+
+    // ---------- Mesajlar ----------
+    match /messages/{id} {
+      allow get, list: if allowed() && participant(resource.data);
+
+      allow create: if allowed()
+        && id.size() <= 64
+        && request.resource.data.keys().hasOnly(
+             ['from', 'to', 'fromPub', 'toPub', 'keepOnServer', 'header', 'media', 'status', 'createdAt'])
+        && request.resource.data.from == me()
+        && request.resource.data.to is string
+        && request.resource.data.to != me()
+        && request.resource.data.to in acl().emails
+        // Gönderen, yayınladığı kendi açık anahtarını kullanmak zorunda
+        && request.resource.data.fromPub == myPublicKey()
+        && request.resource.data.toPub is string
+        && request.resource.data.toPub.size() == 88
+        && request.resource.data.keepOnServer is bool
+        && request.resource.data.status == 'sent'
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.header.keys().hasOnly(['iv', 'ct'])
+        && request.resource.data.header.ct is string
+        && request.resource.data.header.ct.size() <= 20000
+        && (request.resource.data.media == null
+            || (request.resource.data.media.keys().hasOnly(['iv', 'size', 'chunks'])
+                && request.resource.data.media.chunks is int
+                && request.resource.data.media.chunks >= 1
+                && request.resource.data.media.chunks <= 64));
+
+      // Alıcı yalnızca "teslim edildi" olarak işaretleyebilir
+      allow update: if allowed()
+        && resource.data.to == me()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status'])
+        && request.resource.data.status == 'delivered';
+
+      // Alıcı teslim aldıktan sonra, gönderen ise geri çekmek için silebilir
+      allow delete: if allowed() && participant(resource.data);
+
+      // Şifreli medya parçaları
+      match /chunks/{n} {
+        allow get: if allowed() && participant(resource.data);
+        allow create: if allowed()
+          && request.resource.data.keys().hasOnly(['from', 'to', 'data'])
+          && request.resource.data.from == me()
+          && request.resource.data.to is string
+          && request.resource.data.to in acl().emails
+          && request.resource.data.data is bytes
+          && request.resource.data.data.size() <= 600000;
+        allow delete: if allowed() && participant(resource.data);
+        allow list, update: if false;
+      }
+    }
+
+    // ---------- Cihaz taşıma (şifreli, tek kullanımlık) ----------
+    match /transfers/{email} {
+      allow get, delete: if allowed() && email == me();
+      allow create, update: if allowed()
+        && email == me()
+        && request.resource.data.keys().hasOnly(['oldPub', 'iv', 'ct', 'createdAt'])
+        && request.resource.data.ct is string
+        && request.resource.data.ct.size() <= 100000
+        && request.resource.data.createdAt == request.time;
+    }
+  }
+}

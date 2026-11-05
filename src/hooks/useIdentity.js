@@ -17,10 +17,19 @@ import {
   sealTransfer,
   decodeTransferCode,
 } from '../services/crypto';
-import { getIdentity, saveIdentity, getTrustedContacts, saveTrustedContact } from '../services/db';
 import {
-  fetchUserProfile,
-  publishPublicKey,
+  getIdentity,
+  saveIdentity,
+  getTrustedContacts,
+  saveTrustedContact,
+  getMyContacts,
+  saveMyContact,
+} from '../services/db';
+import {
+  fetchMyProfile,
+  publishProfile,
+  deleteCode,
+  subscribeMyProfile,
   subscribeTransfer,
   deleteTransfer,
   writeTransfer,
@@ -29,43 +38,88 @@ import {
 const TRANSFER_MAX_AGE_MS = 10 * 60 * 1000;
 
 export default function useIdentity(me) {
-  const [state, setState] = useState({ status: 'loading', identity: null, publishedKey: null, error: '' });
+  const [state, setState] = useState({
+    status: 'loading',
+    identity: null,
+    publishedKey: null,
+    profile: null,
+    error: '',
+  });
+
+  const publish = useCallback(
+    async (publicKey, overrides = {}) => {
+      const current = overrides.profile || {};
+      const code = await publishProfile({
+        email: me.email,
+        displayName: me.displayName,
+        publicKey,
+        code: 'code' in overrides ? overrides.code : current.code,
+        discoverable: overrides.discoverable ?? current.discoverable ?? false,
+      });
+      return {
+        code,
+        discoverable: overrides.discoverable ?? current.discoverable ?? false,
+        publicKey,
+        displayName: (me.displayName || '').slice(0, 80),
+      };
+    },
+    [me]
+  );
 
   const load = useCallback(async () => {
     if (!me) return;
-    setState((s) => (s.identity?.email === me.email ? s : { status: 'loading', identity: null, publishedKey: null, error: '' }));
+    setState((s) =>
+      s.identity?.email === me.email
+        ? s
+        : { status: 'loading', identity: null, publishedKey: null, profile: null, error: '' }
+    );
     try {
-      const [local, profile] = await Promise.all([getIdentity(me.email), fetchUserProfile(me.email)]);
+      const [local, profile] = await Promise.all([getIdentity(me.email), fetchMyProfile(me.email)]);
       const publishedKey = profile?.publicKey || null;
       if (!local) {
-        setState({ status: 'needs-setup', identity: null, publishedKey, error: '' });
+        setState({ status: 'needs-setup', identity: null, publishedKey, profile, error: '' });
         return;
       }
-      if (!publishedKey) {
-        await publishPublicKey(me.email, me.displayName, local.publicKey);
-        setState({ status: 'ready', identity: local, publishedKey: local.publicKey, error: '' });
+      if (publishedKey && publishedKey !== local.publicKey) {
+        setState({ status: 'stale', identity: local, publishedKey, profile, error: '' });
         return;
       }
-      if (publishedKey !== local.publicKey) {
-        setState({ status: 'stale', identity: local, publishedKey, error: '' });
-        return;
+      let current = profile;
+      // İlk yayın, eski sürümden kalan kodsuz profil veya değişen görünen ad
+      if (!profile || !profile.code || profile.displayName !== (me.displayName || '').slice(0, 80)) {
+        current = await publish(local.publicKey, { profile: profile || {} });
       }
-      // Görünen adı güncel tut
-      if (profile.displayName !== (me.displayName || '').slice(0, 80)) {
-        publishPublicKey(me.email, me.displayName, local.publicKey).catch(() => {});
-      }
-      setState({ status: 'ready', identity: local, publishedKey, error: '' });
+      setState({ status: 'ready', identity: local, publishedKey: local.publicKey, profile: current, error: '' });
     } catch (err) {
       console.error('Kimlik yüklenemedi:', err);
       setState((s) => ({ ...s, status: 'error', error: err.message || 'Kimlik yüklenemedi.' }));
     }
-  }, [me]);
+  }, [me, publish]);
 
   useEffect(() => {
     load();
   }, [load]);
 
-  // Yeni anahtar üret ve yayınla (önceki cihazdaki anahtarı geçersiz kılar)
+  // Hazırken kendi profilini izle: başka cihazda yeni anahtar üretildiyse bu cihaz "eski" olur
+  const readyKey = state.status === 'ready' ? state.identity?.publicKey : null;
+  useEffect(() => {
+    if (!me || !readyKey) return undefined;
+    return subscribeMyProfile(me.email, (profile) => {
+      if (!profile) return;
+      if (profile.publicKey && profile.publicKey !== readyKey) {
+        setState((s) => ({ ...s, status: 'stale', publishedKey: profile.publicKey, profile }));
+      } else {
+        setState((s) =>
+          s.status === 'ready' &&
+          (s.profile?.code !== profile.code || s.profile?.discoverable !== profile.discoverable)
+            ? { ...s, profile: { ...s.profile, code: profile.code, discoverable: profile.discoverable } }
+            : s
+        );
+      }
+    });
+  }, [me, readyKey]);
+
+  // Yeni anahtar üret ve yayınla (önceki cihazdaki anahtarı geçersiz kılar). Kod korunur.
   const createNewIdentity = useCallback(async () => {
     const pair = await generateIdentityKeyPair();
     const identity = {
@@ -74,10 +128,29 @@ export default function useIdentity(me) {
       publicKey: await exportPublicKey(pair.publicKey),
       createdAt: Date.now(),
     };
+    const existing = await fetchMyProfile(me.email).catch(() => null);
+    const profile = await publish(identity.publicKey, { profile: existing || {} });
     await saveIdentity(identity);
-    await publishPublicKey(me.email, me.displayName, identity.publicKey);
-    setState({ status: 'ready', identity, publishedKey: identity.publicKey, error: '' });
-  }, [me]);
+    setState({ status: 'ready', identity, publishedKey: identity.publicKey, profile, error: '' });
+  }, [me, publish]);
+
+  // "E-posta adresimle bulunabilirim" ayarı
+  const setDiscoverable = useCallback(
+    async (discoverable) => {
+      const profile = await publish(state.identity.publicKey, { profile: state.profile, discoverable });
+      setState((s) => ({ ...s, profile }));
+    },
+    [publish, state.identity, state.profile]
+  );
+
+  // Yeni kişi kodu al; eski kod artık çalışmaz
+  const regenerateCode = useCallback(async () => {
+    const oldCode = state.profile?.code;
+    const profile = await publish(state.identity.publicKey, { profile: state.profile, code: null });
+    if (oldCode && oldCode !== profile.code) await deleteCode(oldCode);
+    setState((s) => ({ ...s, profile }));
+    return profile.code;
+  }, [publish, state.identity, state.profile]);
 
   // YENİ CİHAZ: geçici anahtar üret, eski cihazın şifreli paketi yazmasını bekle
   const startReceivingTransfer = useCallback(
@@ -102,11 +175,15 @@ export default function useIdentity(me) {
           };
           await saveIdentity(identity);
           for (const t of secret.trusted || []) {
-            await saveTrustedContact(me.email, t.email, t.publicKey, t.method || 'transfer');
+            await saveTrustedContact(me.email, t.email, t.publicKey, t.method || 'tofu', t.verified);
+          }
+          for (const c of secret.contacts || []) {
+            await saveMyContact(me.email, c.email, c.name, c.code);
           }
           await deleteTransfer(me.email);
           unsub();
-          setState({ status: 'ready', identity, publishedKey: identity.publicKey, error: '' });
+          const profile = await fetchMyProfile(me.email).catch(() => null);
+          setState({ status: 'ready', identity, publishedKey: identity.publicKey, profile, error: '' });
           onDone?.();
         } catch (err) {
           console.error('Taşıma paketi açılamadı:', err);
@@ -129,16 +206,31 @@ export default function useIdentity(me) {
       const identity = state.identity;
       if (!identity) throw new Error('Bu cihazda taşınacak anahtar yok.');
       const trusted = await getTrustedContacts(me.email);
+      const contacts = await getMyContacts(me.email);
       const sealed = await sealTransfer(me.email, parsed.ephPub, {
         privateKey: await exportPrivateKeyJwk(identity.privateKey),
         publicKey: identity.publicKey,
         createdAt: identity.createdAt,
-        trusted: trusted.map((t) => ({ email: t.email, publicKey: t.publicKey, method: t.method })),
+        trusted: trusted.map((t) => ({
+          email: t.email,
+          publicKey: t.publicKey,
+          method: t.method,
+          verified: t.verified ?? t.method !== 'tofu',
+        })),
+        contacts: contacts.map((c) => ({ email: c.email, name: c.name, code: c.code })),
       });
       await writeTransfer(me.email, sealed);
     },
     [me, state.identity]
   );
 
-  return { ...state, reload: load, createNewIdentity, startReceivingTransfer, sendTransfer };
+  return {
+    ...state,
+    reload: load,
+    createNewIdentity,
+    startReceivingTransfer,
+    sendTransfer,
+    setDiscoverable,
+    regenerateCode,
+  };
 }

@@ -13,6 +13,7 @@ import {
   ShieldQuestion,
 } from 'lucide-react';
 import MessageBubble from './MessageBubble';
+import { canMessage } from '../hooks/useMessenger';
 import InputBar from './InputBar';
 
 export default function ChatArea({
@@ -22,6 +23,7 @@ export default function ChatArea({
   onTogglePreference,
   onBack,
   onVerify,
+  onAcceptKey,
   onSendText,
   onSendAudio,
   onSendImage,
@@ -69,7 +71,7 @@ export default function ChatArea({
 
   const initial = (activeContact.name || activeContact.email)[0].toUpperCase();
   const keyStatus = activeContact.keyStatus;
-  const canSend = keyStatus === 'verified';
+  const canSend = canMessage(keyStatus);
 
   return (
     <div className="flex flex-1 flex-col h-full bg-[#0b141a] overflow-hidden select-none">
@@ -97,7 +99,7 @@ export default function ChatArea({
             <button
               onClick={onVerify}
               className={`flex items-center gap-1 text-[11px] font-mono truncate cursor-pointer hover:underline ${
-                keyStatus === 'verified' ? 'text-[#00a884]' : keyStatus === 'changed' ? 'text-red-400' : 'text-amber-400'
+                keyStatus === 'verified' ? 'text-[#00a884]' : keyStatus === 'changed' ? 'text-red-400' : 'text-[#8696a0]'
               }`}
               title="Güvenlik doğrulaması"
             >
@@ -106,7 +108,7 @@ export default function ChatArea({
               ) : keyStatus === 'changed' ? (
                 <ShieldAlert className="h-3 w-3 shrink-0" />
               ) : (
-                <ShieldQuestion className="h-3 w-3 shrink-0" />
+                <Lock className="h-3 w-3 shrink-0" />
               )}
               <span className="truncate">
                 {keyStatus === 'verified'
@@ -115,7 +117,7 @@ export default function ChatArea({
                     ? 'Anahtar değişti!'
                     : keyStatus === 'no-key'
                       ? 'Henüz giriş yapmadı'
-                      : 'Doğrulanmadı'}
+                      : 'Şifreli · doğrula'}
               </span>
             </button>
           </div>
@@ -176,22 +178,34 @@ export default function ChatArea({
           {keyStatus === 'unverified' && (
             <button
               onClick={onVerify}
-              className="max-w-md rounded-xl bg-amber-950/60 px-3.5 py-2.5 text-center text-xs text-amber-100 border border-amber-700/50 cursor-pointer hover:bg-amber-900/60"
+              className="max-w-md rounded-lg px-3 py-1 text-center text-[11px] text-[#8696a0] hover:text-[#e9edef] cursor-pointer"
             >
-              <ShieldQuestion className="inline h-3.5 w-3.5 mr-1" />
-              Mesaj göndermeden önce {activeContact.name} ile <strong>QR kodlarınızı okutarak</strong> doğrulama
-              yapın. Dokunun.
+              <ShieldQuestion className="inline h-3 w-3 mr-1" />
+              İsteğe bağlı: ekstra güvenlik için {activeContact.name} ile QR kodlarınızı okutabilirsiniz.
             </button>
           )}
           {keyStatus === 'changed' && (
-            <button
-              onClick={onVerify}
-              className="max-w-md rounded-xl bg-red-950/70 px-3.5 py-2.5 text-center text-xs text-red-100 border border-red-700/60 cursor-pointer hover:bg-red-900/60"
-            >
-              <ShieldAlert className="inline h-3.5 w-3.5 mr-1" />
-              {activeContact.name} kişisinin güvenlik anahtarı değişti. Yeniden doğrulayana kadar gönderim
-              durduruldu. Dokunun.
-            </button>
+            <div className="max-w-md rounded-xl bg-red-950/70 px-3.5 py-2.5 text-center text-xs text-red-100 border border-red-700/60 space-y-2">
+              <p>
+                <ShieldAlert className="inline h-3.5 w-3.5 mr-1" />
+                {activeContact.name} kişisinin güvenlik anahtarı değişti. Yeni bir telefona geçmiş olabilir. Emin
+                değilseniz kendisine başka bir yoldan sorun.
+              </p>
+              <div className="flex justify-center gap-2">
+                <button
+                  onClick={onAcceptKey}
+                  className="rounded-lg bg-red-600 px-3 py-1.5 text-[11px] font-semibold text-white cursor-pointer"
+                >
+                  Yeni anahtarı kabul et
+                </button>
+                <button
+                  onClick={onVerify}
+                  className="rounded-lg bg-[#202c33] px-3 py-1.5 text-[11px] font-semibold text-[#e9edef] cursor-pointer"
+                >
+                  QR ile doğrula
+                </button>
+              </div>
+            </div>
           )}
           {keyStatus === 'no-key' && (
             <div className="max-w-md rounded-xl bg-[#182229] px-3.5 py-2 text-center text-xs text-[#8696a0] border border-[#2a3942]">
@@ -227,6 +241,11 @@ export default function ChatArea({
       <InputBar
         key={activeContact.email}
         disabled={!canSend}
+        disabledReason={
+          keyStatus === 'changed'
+            ? 'Göndermek için yukarıdan yeni anahtarı onaylayın'
+            : 'Bu kişi henüz uygulamaya giriş yapmadı'
+        }
         onError={onError}
         onSendText={onSendText}
         onSendAudio={onSendAudio}

@@ -5,7 +5,7 @@ import { audioRecorder } from '../services/audio';
 import { prepareImage } from '../services/media';
 import { MAX_TEXT_LENGTH } from '../hooks/useMessenger';
 
-export default function InputBar({ disabled, onSendText, onSendAudio, onSendImage, onError }) {
+export default function InputBar({ disabled, disabledReason, onSendText, onSendAudio, onSendImage, onError }) {
   const [text, setText] = useState('');
   const [isRecording, setIsRecording] = useState(false);
   const [recordSeconds, setRecordSeconds] = useState(0);
@@ -112,7 +112,7 @@ export default function InputBar({ disabled, onSendText, onSendAudio, onSendImag
 
       {disabled ? (
         <div className="flex h-12 items-center justify-center gap-2 text-xs text-[#8696a0]">
-          <Lock className="h-3.5 w-3.5" /> Mesaj göndermek için önce kişiyi doğrulayın
+          <Lock className="h-3.5 w-3.5" /> {disabledReason || 'Şu anda mesaj gönderilemiyor'}
         </div>
       ) : isRecording ? (
         <div className="flex h-12 items-center justify-between gap-3 px-2">

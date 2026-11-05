@@ -4,7 +4,7 @@ import { Loader2 } from 'lucide-react';
 import AuthScreen from './components/AuthScreen';
 import SetupScreen from './components/SetupScreen';
 import MessengerApp from './components/MessengerApp';
-import { watchAuth, fetchAllowlist, logout } from './services/firebase';
+import { watchAuth, checkAccess, logout } from './services/firebase';
 import { normalizeEmail } from './services/crypto';
 import useIdentity from './hooks/useIdentity';
 
@@ -19,7 +19,7 @@ function FullScreenLoader({ text }) {
 export default function App() {
   // undefined: yükleniyor, null: giriş yok
   const [authUser, setAuthUser] = useState(undefined);
-  const [access, setAccess] = useState({ status: 'idle', allowlist: null });
+  const [access, setAccess] = useState({ status: 'idle', admin: false });
   const [authError, setAuthError] = useState('');
 
   useEffect(() => watchAuth((u) => setAuthUser(u || null)), []);
@@ -27,11 +27,11 @@ export default function App() {
   // Sunucu tarafı izin listesi kontrolü
   useEffect(() => {
     if (!authUser) {
-      setAccess({ status: 'idle', allowlist: null });
+      setAccess({ status: 'idle', admin: false });
       return;
     }
     let cancelled = false;
-    setAccess({ status: 'checking', allowlist: null });
+    setAccess({ status: 'checking', admin: false });
     (async () => {
       if (!authUser.emailVerified) {
         setAuthError('Google hesabınızın e-posta adresi doğrulanmamış.');
@@ -39,9 +39,9 @@ export default function App() {
         return;
       }
       try {
-        const list = await fetchAllowlist();
+        const result = await checkAccess(normalizeEmail(authUser.email));
         if (cancelled) return;
-        if (!list) {
+        if (!result.allowed) {
           setAuthError(
             `⛔ ${authUser.email} izin listesinde bulunmuyor. Yalnızca yöneticinin eklediği hesaplar giriş yapabilir.`
           );
@@ -49,10 +49,10 @@ export default function App() {
           return;
         }
         setAuthError('');
-        setAccess({ status: 'allowed', allowlist: list });
+        setAccess({ status: 'allowed', admin: result.admin });
       } catch (err) {
         console.error('İzin kontrolü başarısız:', err);
-        if (!cancelled) setAccess({ status: 'error', allowlist: null });
+        if (!cancelled) setAccess({ status: 'error', admin: false });
       }
     })();
     return () => {
@@ -99,5 +99,5 @@ export default function App() {
     return <SetupScreen me={me} identityState={identity} onLogout={logout} />;
   }
 
-  return <MessengerApp me={me} identityState={identity} onLogout={logout} />;
+  return <MessengerApp me={me} isAdmin={access.admin} identityState={identity} onLogout={logout} />;
 }

@@ -1,13 +1,14 @@
 // napisen - Sol Kenar Çubuğu (Sohbet Listesi & Profil)
 import React, { useState } from 'react';
+import MyCodeCard from './MyCodeCard';
 import {
   Settings,
   Search,
   Shield,
   ShieldAlert,
   ShieldCheck,
-  ShieldQuestion,
   Lock,
+  MessageSquarePlus,
   Mic,
   Image as ImageIcon,
   WifiOff,
@@ -26,17 +27,18 @@ function formatListTime(ts) {
 function KeyBadge({ status }) {
   if (status === 'verified') return <ShieldCheck className="h-3.5 w-3.5 text-[#00a884] shrink-0" aria-label="Doğrulandı" />;
   if (status === 'changed') return <ShieldAlert className="h-3.5 w-3.5 text-red-400 shrink-0" aria-label="Anahtar değişti" />;
-  if (status === 'unverified') return <ShieldQuestion className="h-3.5 w-3.5 text-amber-400 shrink-0" aria-label="Doğrulanmadı" />;
   return null;
 }
 
 export default function Sidebar({
   currentUser,
+  myCode,
   contacts,
   activeContact,
   syncError,
   onSelectContact,
   onOpenSettings,
+  onNewChat,
 }) {
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -58,15 +60,20 @@ export default function Sidebar({
             <span className="text-sm font-semibold text-[#e9edef] truncate leading-tight">
               {currentUser.displayName || currentUser.email.split('@')[0]}
             </span>
-            <span className="flex items-center gap-1 text-[11px] text-[#00a884] font-mono truncate">
-              <Lock className="h-2.5 w-2.5" />
-              {currentUser.email}
-            </span>
+            <MyCodeCard code={myCode} compact />
           </div>
         </div>
 
         {/* Aksiyon İkonları */}
         <div className="flex items-center gap-1 text-[#aebac1]">
+          <button
+            onClick={onNewChat}
+            title="Yeni sohbet"
+            aria-label="Yeni sohbet"
+            className="flex h-10 w-10 items-center justify-center rounded-full hover:bg-[#374248] active:bg-[#202c33] transition cursor-pointer"
+          >
+            <MessageSquarePlus className="h-5 w-5" />
+          </button>
           <button
             onClick={onOpenSettings}
             title="Ayarlar"
@@ -85,7 +92,7 @@ export default function Sidebar({
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="İzinli kişilerde ara..."
+            placeholder="Sohbetlerde ara..."
             className="w-full bg-transparent text-sm text-[#e9edef] placeholder-[#8696a0] focus:outline-none"
           />
         </div>
@@ -107,11 +114,22 @@ export default function Sidebar({
       {/* İzinli Kişiler / Sohbet Listesi */}
       <div className="flex-1 overflow-y-auto divide-y divide-[#222d34]/40">
         {filteredContacts.length === 0 ? (
-          <div className="p-6 text-center text-xs text-[#8696a0]">
-            {contacts.length === 0
-              ? 'İzin listesinde sizden başka kimse yok. Ayarlar → İzin Listesi bölümünden kişi ekleyin.'
-              : 'Eşleşen kişi bulunamadı.'}
-          </div>
+          contacts.length === 0 ? (
+            <div className="flex flex-col items-center gap-3 p-8 text-center">
+              <p className="text-xs leading-relaxed text-[#8696a0]">
+                Henüz sohbetiniz yok. Yazışmak istediğiniz kişiden kişi kodunu isteyin ya da kendi kodunuzu
+                paylaşın.
+              </p>
+              <button
+                onClick={onNewChat}
+                className="flex items-center gap-2 rounded-xl bg-[#00a884] px-4 py-2.5 text-sm font-semibold text-[#111b21] cursor-pointer"
+              >
+                <MessageSquarePlus className="h-4 w-4" /> Yeni sohbet
+              </button>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-xs text-[#8696a0]">Eşleşen sohbet bulunamadı.</div>
+          )
         ) : (
           filteredContacts.map((contact) => {
             const isActive = activeContact?.email === contact.email;
@@ -161,9 +179,9 @@ export default function Sidebar({
                           {contact.lastMessageText ||
                             (contact.keyStatus === 'no-key'
                               ? 'Henüz giriş yapmadı'
-                              : contact.keyStatus === 'verified'
-                                ? contact.email
-                                : 'QR ile doğrulama bekleniyor')}
+                              : contact.keyStatus === 'changed'
+                                ? 'Güvenlik anahtarı değişti'
+                                : contact.code || 'Uçtan uca şifreli')}
                         </span>
                       )}
                     </p>

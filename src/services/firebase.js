@@ -1,7 +1,8 @@
 // napisen - Firebase Servisi (Kimlik Doğrulama + Firestore)
 //
 // Güvenlik sunucu tarafında, firestore.rules ile sağlanır:
-// - Yalnızca Google ile giriş yapmış ve config/allowlist belgesindeki e-postalar erişebilir.
+// - Yalnızca Google ile giriş yapmış ve allowlist/{email} kaydı olan hesaplar erişebilir.
+// - Kullanıcılar birbirlerini listeleyemez; yalnızca e-postasını bildikleri kişiyle yazışabilir.
 // - Herkes yalnızca kendisine gelen / kendi gönderdiği mesajları okuyabilir.
 // - Kimse başkası adına mesaj yazamaz veya başkasının açık anahtarını değiştiremez.
 
@@ -29,8 +30,6 @@ import {
   where,
   onSnapshot,
   serverTimestamp,
-  arrayUnion,
-  arrayRemove,
   Bytes,
 } from 'firebase/firestore';
 
@@ -93,67 +92,145 @@ export function logout() {
   return auth ? signOut(auth) : Promise.resolve();
 }
 
-// ---------- İzin listesi (sunucu tarafı) ----------
-const allowlistRef = () => doc(db, 'config', 'allowlist');
+// ---------- İzin listesi (sunucu tarafı, kişi başına belge) ----------
+// Kullanıcı yalnızca kendi kaydını okuyabilir; tüm listeyi yalnızca yöneticiler görür.
 
-// İzinli değilse güvenlik kuralları okumayı reddeder -> null döner
-export async function fetchAllowlist() {
+// { allowed: boolean, admin: boolean }
+export async function checkAccess(email) {
+  const ref = doc(db, 'allowlist', email);
   try {
-    const snap = await getDoc(allowlistRef());
-    if (!snap.exists()) return null;
-    const data = snap.data();
-    return { emails: data.emails || [], admins: data.admins || [] };
+    const snap = await getDoc(ref);
+    if (snap.exists()) return { allowed: true, admin: snap.data().admin === true };
+    // Kural okumaya izin verdi ama kayıt yok: bu yalnızca uygulama sahibi için olur.
+    // Sahibin kaydını oluştur ki yönetici listesinde görünsün.
+    await setDoc(ref, { admin: true, addedBy: email, addedAt: serverTimestamp() }).catch(() => {});
+    return { allowed: true, admin: true };
+  } catch (err) {
+    if (err?.code === 'permission-denied') return { allowed: false, admin: false };
+    throw err;
+  }
+}
+
+export function subscribeAllowlist(callback, onError) {
+  return onSnapshot(
+    collection(db, 'allowlist'),
+    (snap) => {
+      const entries = [];
+      snap.forEach((d) => entries.push({ email: d.id, admin: d.data().admin === true }));
+      entries.sort((a, b) => a.email.localeCompare(b.email));
+      callback(entries);
+    },
+    (err) => {
+      console.warn('İzin listesi dinlenemedi:', err);
+      onError?.(err);
+    }
+  );
+}
+
+export function addAllowedEmail(email, addedBy, admin = false) {
+  return setDoc(doc(db, 'allowlist', email), { admin, addedBy, addedAt: serverTimestamp() });
+}
+
+export function removeAllowedEmail(email) {
+  return deleteDoc(doc(db, 'allowlist', email));
+}
+
+// ---------- Kişi kodları ve profiller ----------
+// codes/{KOD}: kodu bilen herkesin okuyabildiği açık profil (ad + açık anahtar)
+// users/{email}: sahibine özel; "e-postayla bulunabilirim" açıksa diğerleri de okuyabilir
+
+const CODE_ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ'; // karışan 0/O, 1/I harfleri yok
+
+export function normalizeCode(input) {
+  const raw = (input || '').toUpperCase().replace(/[^0-9A-Z]/g, '');
+  if (raw.length !== 8 || [...raw].some((c) => !CODE_ALPHABET.includes(c))) return null;
+  return `${raw.slice(0, 4)}-${raw.slice(4)}`;
+}
+
+function randomCode() {
+  const bytes = crypto.getRandomValues(new Uint8Array(8));
+  const raw = Array.from(bytes, (b) => CODE_ALPHABET[b % 32]).join('');
+  return `${raw.slice(0, 4)}-${raw.slice(4)}`;
+}
+
+export async function fetchMyProfile(email) {
+  const snap = await getDoc(doc(db, 'users', email));
+  return snap.exists() ? snap.data() : null;
+}
+
+// Profili yayınlar. code verilmezse yeni bir kod alır (çakışırsa tekrar dener).
+export async function publishProfile({ email, displayName, publicKey, code, discoverable }) {
+  const name = (displayName || '').slice(0, 80);
+  const publicPart = { email, displayName: name, publicKey, updatedAt: serverTimestamp() };
+  let finalCode = code;
+  if (finalCode) {
+    await setDoc(doc(db, 'codes', finalCode), publicPart);
+  } else {
+    for (let attempt = 0; attempt < 6 && !finalCode; attempt++) {
+      const candidate = randomCode();
+      try {
+        // Başkasına ait bir kodun üzerine yazmayı kurallar reddeder -> yeni kod dene
+        await setDoc(doc(db, 'codes', candidate), publicPart);
+        finalCode = candidate;
+      } catch (err) {
+        if (err?.code !== 'permission-denied') throw err;
+      }
+    }
+    if (!finalCode) throw new Error('Kişi kodu oluşturulamadı.');
+  }
+  await setDoc(doc(db, 'users', email), {
+    ...publicPart,
+    code: finalCode,
+    discoverable: Boolean(discoverable),
+  });
+  return finalCode;
+}
+
+export async function deleteCode(code) {
+  await deleteDoc(doc(db, 'codes', code)).catch(() => {});
+}
+
+// Kendi profilini dinle (başka cihazda yeni anahtar oluşturulursa fark etmek için)
+export function subscribeMyProfile(email, callback) {
+  return onSnapshot(
+    doc(db, 'users', email),
+    (snap) => callback(snap.exists() ? snap.data() : null),
+    (err) => console.warn('Profil dinlenemedi:', err?.code)
+  );
+}
+
+// Kodla kişi bul: { email, displayName, publicKey } veya null
+export async function lookupByCode(code) {
+  try {
+    const snap = await getDoc(doc(db, 'codes', code));
+    return snap.exists() ? { ...snap.data(), code } : null;
   } catch (err) {
     if (err?.code === 'permission-denied') return null;
     throw err;
   }
 }
 
-export function subscribeAllowlist(callback) {
+// E-postayla kişi bul (yalnızca kişi buna izin verdiyse). Kayıtlı olmayan ile
+// izin vermeyen ayırt edilemez; ikisinde de null döner.
+export async function lookupByEmail(email) {
+  try {
+    const snap = await getDoc(doc(db, 'users', email));
+    return snap.exists() ? snap.data() : null;
+  } catch (err) {
+    if (err?.code === 'permission-denied') return null;
+    throw err;
+  }
+}
+
+// Bir kişinin açık profilini (anahtar değişikliklerini) kodu üzerinden dinler
+export function subscribeCode(code, callback) {
   return onSnapshot(
-    allowlistRef(),
-    (snap) => {
-      const data = snap.data() || {};
-      callback({ emails: data.emails || [], admins: data.admins || [] });
-    },
-    (err) => console.warn('İzin listesi dinlenemedi:', err)
-  );
-}
-
-export function addAllowedEmail(email) {
-  return updateDoc(allowlistRef(), { emails: arrayUnion(email) });
-}
-
-export function removeAllowedEmail(email) {
-  return updateDoc(allowlistRef(), { emails: arrayRemove(email), admins: arrayRemove(email) });
-}
-
-// ---------- Kullanıcı profilleri ve açık anahtarlar ----------
-export function publishPublicKey(email, displayName, publicKey) {
-  return setDoc(doc(db, 'users', email), {
-    email,
-    displayName: (displayName || '').slice(0, 80),
-    publicKey,
-    updatedAt: serverTimestamp(),
-  });
-}
-
-export async function fetchUserProfile(email) {
-  const snap = await getDoc(doc(db, 'users', email));
-  return snap.exists() ? snap.data() : null;
-}
-
-export function subscribeUsers(callback) {
-  return onSnapshot(
-    collection(db, 'users'),
-    (snap) => {
-      const users = {};
-      snap.forEach((d) => {
-        users[d.id] = d.data();
-      });
-      callback(users);
-    },
-    (err) => console.warn('Kullanıcılar dinlenemedi:', err)
+    doc(db, 'codes', code),
+    (snap) => callback(snap.exists() ? { ...snap.data(), code } : null),
+    (err) => {
+      console.warn('Profil dinlenemedi:', code, err?.code);
+      callback(null);
+    }
   );
 }
 

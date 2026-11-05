@@ -147,15 +147,20 @@ export async function publicKeyFingerprint(pubB64) {
 }
 
 // ---------- QR kod içerikleri ----------
-// Kişi doğrulama kodu: napisen:v1:<email>:<açık anahtar (base64url)>
-export function encodeVerifyCode(email, pubB64) {
+// Kişi doğrulama kodu: napisen:v2:<kişi kodu>:<email>:<açık anahtar (base64url)>
+// (eski napisen:v1:<email>:<anahtar> biçimi de okunur)
+export function encodeVerifyCode(email, pubB64, code) {
+  if (code) return `napisen:v2:${code}:${normalizeEmail(email)}:${toB64Url(pubB64)}`;
   return `napisen:v1:${normalizeEmail(email)}:${toB64Url(pubB64)}`;
 }
 
 export function decodeVerifyCode(text) {
-  const m = /^napisen:v1:([^:\s]+@[^:\s]+):([A-Za-z0-9_-]+)$/.exec((text || '').trim());
+  const t = (text || '').trim();
+  const v2 = /^napisen:v2:([2-9A-HJ-NP-Z]{4}-[2-9A-HJ-NP-Z]{4}):([^:\s]+@[^:\s]+):([A-Za-z0-9_-]+)$/.exec(t);
+  if (v2) return { code: v2[1], email: normalizeEmail(v2[2]), publicKey: fromB64Url(v2[3]) };
+  const m = /^napisen:v1:([^:\s]+@[^:\s]+):([A-Za-z0-9_-]+)$/.exec(t);
   if (!m) return null;
-  return { email: normalizeEmail(m[1]), publicKey: fromB64Url(m[2]) };
+  return { code: null, email: normalizeEmail(m[1]), publicKey: fromB64Url(m[2]) };
 }
 
 // Cihaz taşıma kodu: napisen-transfer:v1:<email>:<geçici açık anahtar>

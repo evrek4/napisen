@@ -1,10 +1,20 @@
 rules_version = '2';
 
 // napisen - Firestore Güvenlik Kuralları
-// Tüm erişim, Google ile giriş yapmış ve config/allowlist belgesinde kayıtlı e-postalarla sınırlıdır.
-// Mesaj içerikleri uçtan uca şifreli olduğundan sunucu yalnızca şifreli veriyi görür.
+//
+// - İzin listesi: allowlist/{email} belgeleri. Her kullanıcı yalnızca KENDİ kaydını okuyabilir;
+//   listenin tamamını yalnızca yöneticiler görebilir. Kullanıcılar birbirlerini listeleyemez.
+// - Kişi bulma: Her kullanıcının tahmin edilmesi zor bir kodu vardır (codes/{kod}). Kodu bilen
+//   kişi bulunabilir. E-postayla bulunmak isteğe bağlıdır (users/{email}.discoverable).
+// - Uygulama sahibi (OWNER) her zaman izinli ve yöneticidir; ilk kurulumda konsolda belge
+//   oluşturmak gerekmez. Sahibi değiştirmek için aşağıdaki owner() fonksiyonunu düzenleyin.
+// - Mesaj içerikleri uçtan uca şifreli olduğundan sunucu yalnızca şifreli veriyi görür.
 service cloud.firestore {
   match /databases/{database}/documents {
+
+    function owner() {
+      return 'achartave@gmail.com';
+    }
 
     function signedIn() {
       return request.auth != null
@@ -16,58 +26,94 @@ service cloud.firestore {
       return request.auth.token.email.lower();
     }
 
-    function allowlistPath() {
-      return /databases/$(database)/documents/config/allowlist;
+    function entry(email) {
+      return /databases/$(database)/documents/allowlist/$(email);
     }
 
-    function acl() {
-      return get(allowlistPath()).data;
+    function allowedEmail(email) {
+      return email is string && (email == owner() || exists(entry(email)));
     }
 
     function allowed() {
-      return signedIn() && exists(allowlistPath()) && me() in acl().emails;
+      return signedIn() && allowedEmail(me());
     }
 
     function isAdmin() {
-      return allowed() && me() in acl().admins;
+      return signedIn()
+        && (me() == owner() || (exists(entry(me())) && get(entry(me())).data.admin == true));
     }
 
     function participant(d) {
       return d.from == me() || d.to == me();
     }
 
-    function myPublicKey() {
-      return get(/databases/$(database)/documents/users/$(me())).data.publicKey;
+    function myProfile() {
+      return get(/databases/$(database)/documents/users/$(me())).data;
+    }
+
+    function validCode(code) {
+      return code is string && code.matches('^[2-9A-HJ-NP-Z]{4}-[2-9A-HJ-NP-Z]{4}$');
+    }
+
+    function validPublicProfile(d) {
+      return d.publicKey is string
+        && d.publicKey.size() == 88
+        && d.displayName is string
+        && d.displayName.size() <= 80
+        && d.updatedAt == request.time;
     }
 
     // ---------- İzin listesi ----------
-    // İlk kurulumda Firebase Console'dan elle oluşturulur (README'ye bakın).
-    match /config/allowlist {
-      allow get: if allowed();
-      allow update: if isAdmin()
-        && request.resource.data.keys().hasOnly(['emails', 'admins'])
-        && request.resource.data.emails is list
-        && request.resource.data.admins is list
-        && request.resource.data.emails.size() <= 200
-        && request.resource.data.admins.size() > 0
-        && request.resource.data.emails.hasAll(request.resource.data.admins)
-        // Yönetici kendini listeden / yöneticilikten çıkaramaz (kilitlenmeyi önler)
-        && me() in request.resource.data.admins;
-      allow create, delete, list: if false;
+    match /allowlist/{email} {
+      // Kendi kaydını herkes okuyabilir (erişim kontrolü için); diğerlerini yalnızca yöneticiler
+      allow get: if allowed() && (email == me() || isAdmin());
+      allow list: if isAdmin();
+      allow create, update: if isAdmin()
+        && email == email.lower()
+        && email.matches('^[^@\\s]+@[^@\\s]+[.][^@\\s]+$')
+        && request.resource.data.keys().hasOnly(['admin', 'addedBy', 'addedAt'])
+        && request.resource.data.admin is bool
+        && request.resource.data.addedBy == me()
+        && request.resource.data.addedAt == request.time
+        // Yönetici kendi yetkisini kaldıramaz
+        && (email != me() || request.resource.data.admin == true);
+      allow delete: if isAdmin() && email != me() && email != owner();
     }
 
-    // ---------- Kullanıcı profilleri / açık anahtarlar ----------
-    match /users/{email} {
-      allow get, list: if allowed();
-      allow create, update: if allowed()
-        && email == me()
+    // ---------- Kişi kodları (herkese açık profil, yalnızca kodu bilen okur) ----------
+    match /codes/{code} {
+      allow get: if allowed();
+      allow list: if false;
+      allow create: if allowed()
+        && validCode(code)
         && request.resource.data.keys().hasOnly(['email', 'displayName', 'publicKey', 'updatedAt'])
         && request.resource.data.email == me()
-        && request.resource.data.publicKey is string
-        && request.resource.data.publicKey.size() == 88
-        && request.resource.data.displayName is string
-        && request.resource.data.displayName.size() <= 80
-        && request.resource.data.updatedAt == request.time;
+        && validPublicProfile(request.resource.data);
+      allow update: if allowed()
+        && resource.data.email == me()
+        && request.resource.data.keys().hasOnly(['email', 'displayName', 'publicKey', 'updatedAt'])
+        && request.resource.data.email == me()
+        && validPublicProfile(request.resource.data);
+      allow delete: if allowed() && resource.data.email == me();
+    }
+
+    // ---------- Kullanıcı profilleri ----------
+    // Yalnızca sahibi okuyabilir; sahibi "e-postayla bulunabilirim" dediyse diğerleri de okuyabilir.
+    // Listeleme kapalı.
+    match /users/{email} {
+      allow get: if allowed() && (email == me() || resource.data.discoverable == true);
+      allow list: if false;
+      allow create, update: if allowed()
+        && email == me()
+        && request.resource.data.keys().hasOnly(
+             ['email', 'displayName', 'publicKey', 'code', 'discoverable', 'updatedAt'])
+        && request.resource.data.email == me()
+        && validPublicProfile(request.resource.data)
+        && request.resource.data.discoverable is bool
+        // Kod gerçekten bu kullanıcıya ait olmalı
+        && validCode(request.resource.data.code)
+        && exists(/databases/$(database)/documents/codes/$(request.resource.data.code))
+        && get(/databases/$(database)/documents/codes/$(request.resource.data.code)).data.email == me();
       allow delete: if false;
     }
 
@@ -78,13 +124,16 @@ service cloud.firestore {
       allow create: if allowed()
         && id.size() <= 64
         && request.resource.data.keys().hasOnly(
-             ['from', 'to', 'fromPub', 'toPub', 'keepOnServer', 'header', 'media', 'status', 'createdAt'])
+             ['from', 'to', 'fromPub', 'toPub', 'fromCode', 'toCode', 'keepOnServer', 'header', 'media',
+              'status', 'createdAt'])
         && request.resource.data.from == me()
         && request.resource.data.to is string
         && request.resource.data.to != me()
-        && request.resource.data.to in acl().emails
-        // Gönderen, yayınladığı kendi açık anahtarını kullanmak zorunda
-        && request.resource.data.fromPub == myPublicKey()
+        && allowedEmail(request.resource.data.to)
+        // Gönderen, yayınladığı kendi açık anahtarını ve kodunu kullanmak zorunda
+        && request.resource.data.fromPub == myProfile().publicKey
+        && request.resource.data.fromCode == myProfile().code
+        && (request.resource.data.toCode == null || validCode(request.resource.data.toCode))
         && request.resource.data.toPub is string
         && request.resource.data.toPub.size() == 88
         && request.resource.data.keepOnServer is bool
@@ -114,8 +163,7 @@ service cloud.firestore {
         allow create: if allowed()
           && request.resource.data.keys().hasOnly(['from', 'to', 'data'])
           && request.resource.data.from == me()
-          && request.resource.data.to is string
-          && request.resource.data.to in acl().emails
+          && allowedEmail(request.resource.data.to)
           && request.resource.data.data is bytes
           && request.resource.data.data.size() <= 600000;
         allow delete: if allowed() && participant(resource.data);
@@ -132,6 +180,11 @@ service cloud.firestore {
         && request.resource.data.ct is string
         && request.resource.data.ct.size() <= 100000
         && request.resource.data.createdAt == request.time;
+    }
+
+    // Eski sürümden kalan config/* belgeleri artık kullanılmaz
+    match /config/{doc} {
+      allow read, write: if false;
     }
   }
 }

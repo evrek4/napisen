@@ -13,12 +13,12 @@ import {
   where,
   getDocs,
   serverTimestamp,
-  arrayUnion,
   Bytes,
 } from 'firebase/firestore';
 
 const PUB = (c) => 'B' + c.repeat(87); // 88 karakterlik sahte açık anahtar
 const KEYS = { 'a@x.com': PUB('a'), 'b@x.com': PUB('b'), 'c@x.com': PUB('c') };
+const CODES = { 'a@x.com': 'AAAA-2222', 'b@x.com': 'BBBB-2222', 'c@x.com': 'CCCC-2222' };
 
 let env;
 const ctx = (email, verified = true) =>
@@ -30,6 +30,8 @@ function message(from, to, extra = {}) {
     to,
     fromPub: KEYS[from],
     toPub: KEYS[to] || PUB('z'),
+    fromCode: CODES[from] || 'ZZZZ-2222',
+    toCode: CODES[to] || null,
     keepOnServer: false,
     header: { iv: 'aXY=', ct: 'Y3Q=' },
     media: null,
@@ -48,53 +50,135 @@ beforeAll(async () => {
 
 afterAll(() => env?.cleanup());
 
+const OWNER = 'achartave@gmail.com';
+
 beforeEach(async () => {
   await env.clearFirestore();
   await env.withSecurityRulesDisabled(async (c) => {
     const db = c.firestore();
-    await setDoc(doc(db, 'config/allowlist'), { emails: ['a@x.com', 'b@x.com', 'c@x.com'], admins: ['a@x.com'] });
+    for (const email of ['a@x.com', 'b@x.com', 'c@x.com']) {
+      await setDoc(doc(db, 'allowlist', email), { admin: false, addedBy: OWNER, addedAt: new Date() });
+    }
+    await setDoc(doc(db, 'allowlist', 'adm@x.com'), { admin: true, addedBy: OWNER, addedAt: new Date() });
     for (const [email, publicKey] of Object.entries(KEYS)) {
-      await setDoc(doc(db, 'users', email), { email, displayName: email, publicKey, updatedAt: new Date() });
+      const code = CODES[email];
+      await setDoc(doc(db, 'codes', code), { email, displayName: email, publicKey, updatedAt: new Date() });
+      await setDoc(doc(db, 'users', email), {
+        email,
+        displayName: email,
+        publicKey,
+        code,
+        discoverable: email === 'b@x.com', // yalnızca b e-postayla bulunabilir
+        updatedAt: new Date(),
+      });
     }
     await setDoc(doc(db, 'messages/m1'), { ...message('a@x.com', 'b@x.com'), createdAt: new Date() });
   });
 });
 
-describe('İzin listesi', () => {
+const entry = (email, admin = false, by = OWNER) => ({ admin, addedBy: by, addedAt: serverTimestamp() });
+
+describe('İzin listesi ve gizlilik', () => {
   it('listede olmayan kullanıcı hiçbir şey okuyamaz', async () => {
     const db = ctx('eve@x.com');
-    await assertFails(getDoc(doc(db, 'config/allowlist')));
+    await assertFails(getDoc(doc(db, 'allowlist/eve@x.com')));
     await assertFails(getDoc(doc(db, 'users/a@x.com')));
     await assertFails(getDocs(query(collection(db, 'messages'), where('to', '==', 'eve@x.com'))));
   });
 
-  it('giriş yapmamış kullanıcı okuyamaz', async () => {
-    await assertFails(getDoc(doc(env.unauthenticatedContext().firestore(), 'config/allowlist')));
+  it('giriş yapmamış veya e-postası doğrulanmamış kullanıcı okuyamaz', async () => {
+    await assertFails(getDoc(doc(env.unauthenticatedContext().firestore(), 'allowlist/a@x.com')));
+    await assertFails(getDoc(doc(ctx('b@x.com', false), 'allowlist/b@x.com')));
   });
 
-  it('e-postası doğrulanmamış hesap okuyamaz', async () => {
-    await assertFails(getDoc(doc(ctx('b@x.com', false), 'config/allowlist')));
-  });
-
-  it('listedeki kullanıcı okuyabilir ama değiştiremez', async () => {
+  it('kullanıcı yalnızca kendi kaydını görür, listeyi ve başkalarının kaydını göremez', async () => {
     const db = ctx('b@x.com');
-    await assertSucceeds(getDoc(doc(db, 'config/allowlist')));
-    await assertFails(updateDoc(doc(db, 'config/allowlist'), { emails: arrayUnion('eve@x.com') }));
+    await assertSucceeds(getDoc(doc(db, 'allowlist/b@x.com')));
+    await assertFails(getDoc(doc(db, 'allowlist/a@x.com')));
+    await assertFails(getDocs(collection(db, 'allowlist')));
   });
 
-  it('yönetici kişi ekleyebilir ama kendini yöneticilikten çıkaramaz', async () => {
-    const db = ctx('a@x.com');
-    await assertSucceeds(updateDoc(doc(db, 'config/allowlist'), { emails: arrayUnion('d@x.com') }));
-    await assertFails(updateDoc(doc(db, 'config/allowlist'), { admins: [] }));
+  it('kullanıcılar ve kodlar listelenemez', async () => {
+    const db = ctx('b@x.com');
+    await assertFails(getDocs(collection(db, 'users')));
+    await assertFails(getDocs(collection(db, 'codes')));
+  });
+
+  it('e-postayla bulunma yalnızca kişi izin verdiyse çalışır', async () => {
+    await assertFails(getDoc(doc(ctx('b@x.com'), 'users/a@x.com'))); // a kapalı
+    await assertSucceeds(getDoc(doc(ctx('a@x.com'), 'users/b@x.com'))); // b açık
+    await assertSucceeds(getDoc(doc(ctx('a@x.com'), 'users/a@x.com'))); // kendi profili
+    await assertFails(getDoc(doc(ctx('a@x.com'), 'users/yok@x.com'))); // kayıtsız ile kapalı ayırt edilemez
+  });
+
+  it('kodu bilen izinli kullanıcı profili bulur; izinsiz kullanıcı bulamaz', async () => {
+    await assertSucceeds(getDoc(doc(ctx('b@x.com'), 'codes/AAAA-2222')));
+    await assertFails(getDoc(doc(ctx('eve@x.com'), 'codes/AAAA-2222')));
+  });
+
+  it('normal kullanıcı listeye kişi ekleyemez', async () => {
+    await assertFails(setDoc(doc(ctx('b@x.com'), 'allowlist/eve@x.com'), entry('eve@x.com', false, 'b@x.com')));
+    await assertFails(setDoc(doc(ctx('b@x.com'), 'allowlist/b@x.com'), entry('b@x.com', true, 'b@x.com')));
+  });
+
+  it('sahip, kaydı olmadan da girer, kendi kaydını oluşturur ve listeyi yönetir', async () => {
+    const db = ctx(OWNER);
+    await assertSucceeds(getDoc(doc(db, `allowlist/${OWNER}`)));
+    await assertSucceeds(setDoc(doc(db, `allowlist/${OWNER}`), entry(OWNER, true)));
+    await assertSucceeds(getDocs(collection(db, 'allowlist')));
+    await assertSucceeds(setDoc(doc(db, 'allowlist/d@x.com'), entry('d@x.com')));
+    await assertSucceeds(deleteDoc(doc(db, 'allowlist/d@x.com')));
+    await assertFails(deleteDoc(doc(db, `allowlist/${OWNER}`)));
+  });
+
+  it('yönetici ekler/çıkarır; kendini çıkaramaz, yetkisini düşüremez, sahibi silemez', async () => {
+    const db = ctx('adm@x.com');
+    await assertSucceeds(getDocs(collection(db, 'allowlist')));
+    await assertSucceeds(setDoc(doc(db, 'allowlist/d@x.com'), entry('d@x.com', false, 'adm@x.com')));
+    await assertSucceeds(deleteDoc(doc(db, 'allowlist/d@x.com')));
+    await assertFails(deleteDoc(doc(db, 'allowlist/adm@x.com')));
+    await assertFails(setDoc(doc(db, 'allowlist/adm@x.com'), entry('adm@x.com', false, 'adm@x.com')));
+    await assertFails(deleteDoc(doc(db, `allowlist/${OWNER}`)));
+  });
+
+  it('büyük harfli / geçersiz adres ve sahte "addedBy" reddedilir', async () => {
+    const db = ctx(OWNER);
+    await assertFails(setDoc(doc(db, 'allowlist/Big@x.com'), entry('Big@x.com')));
+    await assertFails(setDoc(doc(db, 'allowlist/bozuk'), entry('bozuk')));
+    await assertFails(setDoc(doc(db, 'allowlist/e@x.com'), entry('e@x.com', false, 'b@x.com')));
+  });
+
+  it('eski config belgeleri kimseye açık değil', async () => {
+    await assertFails(getDoc(doc(ctx(OWNER), 'config/allowlist')));
   });
 });
 
-describe('Açık anahtarlar', () => {
-  it('kullanıcı yalnızca kendi anahtarını yayınlayabilir', async () => {
+describe('Kişi kodları ve profiller', () => {
+  const pub = (email, publicKey = PUB('n')) => ({ email, displayName: 'X', publicKey, updatedAt: serverTimestamp() });
+
+  it('kullanıcı kendine kod alabilir; başkası adına veya başkasının kodunun üzerine yazamaz', async () => {
     const db = ctx('b@x.com');
-    const data = { email: 'b@x.com', displayName: 'B', publicKey: PUB('n'), updatedAt: serverTimestamp() };
-    await assertSucceeds(setDoc(doc(db, 'users/b@x.com'), data));
-    await assertFails(setDoc(doc(db, 'users/a@x.com'), { ...data, email: 'a@x.com' }));
+    await assertSucceeds(setDoc(doc(db, 'codes/BXYZ-3456'), pub('b@x.com')));
+    await assertFails(setDoc(doc(db, 'codes/BXYZ-3457'), pub('a@x.com')));
+    await assertFails(setDoc(doc(db, 'codes/AAAA-2222'), pub('b@x.com')));
+  });
+
+  it('geçersiz biçimli kod reddedilir', async () => {
+    await assertFails(setDoc(doc(ctx('b@x.com'), 'codes/abc'), pub('b@x.com')));
+    await assertFails(setDoc(doc(ctx('b@x.com'), 'codes/OOOO-1111'), pub('b@x.com')));
+  });
+
+  it('kod yalnızca sahibince silinir', async () => {
+    await assertFails(deleteDoc(doc(ctx('b@x.com'), 'codes/AAAA-2222')));
+    await assertSucceeds(deleteDoc(doc(ctx('a@x.com'), 'codes/AAAA-2222')));
+  });
+
+  it('profil yalnızca kendi kodunu gösterebilir', async () => {
+    const db = ctx('b@x.com');
+    const data = (code) => ({ ...pub('b@x.com'), code, discoverable: false });
+    await assertSucceeds(setDoc(doc(db, 'users/b@x.com'), data('BBBB-2222')));
+    await assertFails(setDoc(doc(db, 'users/b@x.com'), data('AAAA-2222')));
+    await assertFails(setDoc(doc(db, 'users/a@x.com'), { ...data('AAAA-2222'), email: 'a@x.com' }));
   });
 });
 
@@ -105,9 +189,10 @@ describe('Mesajlar', () => {
     await assertFails(setDoc(doc(db, 'messages/m3'), message('b@x.com', 'c@x.com')));
   });
 
-  it('yayınlanmış anahtarından farklı bir gönderici anahtarı reddedilir', async () => {
+  it('yayınlanmış anahtarından / kodundan farklı gönderici bilgisi reddedilir', async () => {
     const db = ctx('a@x.com');
     await assertFails(setDoc(doc(db, 'messages/m4'), message('a@x.com', 'b@x.com', { fromPub: PUB('q') })));
+    await assertFails(setDoc(doc(db, 'messages/m4b'), message('a@x.com', 'b@x.com', { fromCode: 'BBBB-2222' })));
   });
 
   it('izin listesinde olmayan kişiye gönderilemez', async () => {

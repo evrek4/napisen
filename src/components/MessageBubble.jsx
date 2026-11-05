@@ -142,9 +142,9 @@ export default function MessageBubble({ message, onImageClick, onRetry }) {
           </p>
         )}
 
-        {message.unverifiedSender && (
+        {message.keyMismatch && (
           <p className="mb-1 flex items-center gap-1 text-[10px] text-amber-300">
-            <ShieldQuestion className="h-3 w-3" /> Doğrulanmamış anahtarla geldi
+            <ShieldQuestion className="h-3 w-3" /> Kayıtlı olandan farklı bir anahtarla geldi
           </p>
         )}
 

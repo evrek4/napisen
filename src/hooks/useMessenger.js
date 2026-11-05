@@ -3,8 +3,10 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  subscribeUsers,
-  subscribeAllowlist,
+  subscribeCode,
+  lookupByCode,
+  lookupByEmail,
+  normalizeCode,
   subscribeMessages,
   uploadMessage,
   downloadMediaBytes,
@@ -18,6 +20,7 @@ import {
   encryptBytes,
   decryptBytes,
   decodeVerifyCode,
+  normalizeEmail,
 } from '../services/crypto';
 import {
   conversationIdFor,
@@ -31,8 +34,10 @@ import {
   saveConversationMeta,
   getTrustedContacts,
   saveTrustedContact,
-  removeTrustedContact,
   deleteLocalMessage,
+  getMyContacts,
+  saveMyContact,
+  removeMyContact,
 } from '../services/db';
 import { showMessageNotification } from '../services/notify';
 import { MAX_MEDIA_BYTES } from '../services/media';
@@ -54,14 +59,24 @@ function previewText(msg) {
   return msg.text || '';
 }
 
-export function contactKeyStatus(publishedKey, trustedKey) {
-  if (!publishedKey) return 'no-key';
-  if (!trustedKey) return 'unverified';
-  return trustedKey === publishedKey ? 'verified' : 'changed';
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+// no-key     : kişi henüz giriş yapmadı
+// unverified : mesajlaşılabilir; anahtar ilk görüşte sabitlendi ama QR ile doğrulanmadı (isteğe bağlı)
+// verified   : QR / güvenlik numarası ile doğrulandı
+// changed    : sabitlenen anahtar değişti -> kullanıcı onaylayana kadar gönderim durur
+export function contactKeyStatus(publishedKey, trustedRecord) {
+  // Profil okunamıyorsa (ör. kişi kodunu yeniledi) daha önce kaydedilen anahtarla devam edilir
+  if (!publishedKey) return trustedRecord ? (trustedRecord.verified ? 'verified' : 'unverified') : 'no-key';
+  if (!trustedRecord) return 'unverified';
+  if (trustedRecord.publicKey !== publishedKey) return 'changed';
+  return trustedRecord.verified ? 'verified' : 'unverified';
 }
 
-export default function useMessenger({ me, identity, preferences }) {
-  const [allowlist, setAllowlist] = useState({ emails: [], admins: [] });
+export const canMessage = (status) => status === 'verified' || status === 'unverified';
+
+export default function useMessenger({ me, identity, myCode, preferences }) {
+  const [myContacts, setMyContacts] = useState({});
   const [users, setUsers] = useState({});
   const [trusted, setTrusted] = useState({});
   const [metas, setMetas] = useState({});
@@ -74,10 +89,14 @@ export default function useMessenger({ me, identity, preferences }) {
   const activeRef = useRef(activeEmail);
   const trustedRef = useRef(trusted);
   const usersRef = useRef(users);
+  const myContactsRef = useRef(myContacts);
   prefsRef.current = preferences;
   activeRef.current = activeEmail;
   trustedRef.current = trusted;
   usersRef.current = users;
+  myContactsRef.current = myContacts;
+  const myCodeRef = useRef(myCode);
+  myCodeRef.current = myCode;
 
   const keyCache = useRef(new Map());
   const memStore = useRef(new Map()); // Hayalet Mod: id -> mesaj (yalnızca RAM)
@@ -183,17 +202,90 @@ export default function useMessenger({ me, identity, preferences }) {
     [writeMeta]
   );
 
-  // ---------- Abonelikler: izin listesi, kullanıcılar, doğrulanmış kişiler, özetler ----------
-  useEffect(() => subscribeAllowlist(setAllowlist), []);
-  useEffect(() => subscribeUsers(setUsers), []);
+  // ---------- Kişiler (yalnızca bu cihazda) ve anahtar sabitleme ----------
+  const ensureContact = useCallback(
+    async (email, code, name) => {
+      const existing = myContactsRef.current[email];
+      if (existing && (!code || existing.code === code)) return;
+      const rec = await saveMyContact(myEmail, email, name || existing?.name || '', code || existing?.code);
+      myContactsRef.current = { ...myContactsRef.current, [email]: rec };
+      setMyContacts(myContactsRef.current);
+    },
+    [myEmail]
+  );
+
+  const setTrustedRecord = useCallback((email, rec) => {
+    trustedRef.current = { ...trustedRef.current, [email]: rec };
+    setTrusted(trustedRef.current);
+  }, []);
+
+  // İlk görüşte anahtarı sabitle (TOFU). Sonradan değişirse kullanıcı uyarılır.
+  const pinIfNew = useCallback(
+    async (email, publicKey) => {
+      const existing = trustedRef.current[email];
+      if (existing || !publicKey) return existing || null;
+      const rec = await saveTrustedContact(myEmail, email, publicKey, 'tofu', false);
+      setTrustedRecord(email, rec);
+      return rec;
+    },
+    [myEmail, setTrustedRecord]
+  );
+
+  // Yalnızca kişi listesindekilerin açık profilleri, kodları üzerinden tek tek dinlenir
+  const userSubs = useRef(new Map()); // email -> { code, unsub }
+  useEffect(() => {
+    for (const [email, contact] of Object.entries(myContacts)) {
+      const sub = userSubs.current.get(email);
+      if (sub && sub.code === contact.code) continue;
+      sub?.unsub();
+      if (!contact.code) {
+        userSubs.current.delete(email);
+        continue;
+      }
+      userSubs.current.set(email, {
+        code: contact.code,
+        unsub: subscribeCode(contact.code, (profile) =>
+          setUsers((prev) => ({ ...prev, [email]: profile && profile.email === email ? profile : null }))
+        ),
+      });
+    }
+    for (const [email, sub] of userSubs.current) {
+      if (!myContacts[email]) {
+        sub.unsub();
+        userSubs.current.delete(email);
+      }
+    }
+  }, [myContacts]);
+  useEffect(
+    () => () => {
+      userSubs.current.forEach((sub) => sub.unsub());
+      userSubs.current.clear();
+    },
+    []
+  );
+
+  const fetchProfile = useCallback(async (email) => {
+    const code = myContactsRef.current[email]?.code;
+    if (!code) return null;
+    const profile = await lookupByCode(code);
+    return profile && profile.email === email ? profile : null;
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
+    getMyContacts(myEmail).then((list) => {
+      if (cancelled) return;
+      const map = {};
+      list.forEach((c) => (map[c.email] = c));
+      myContactsRef.current = { ...map, ...myContactsRef.current };
+      setMyContacts(myContactsRef.current);
+    });
     getTrustedContacts(myEmail).then((list) => {
       if (cancelled) return;
       const map = {};
-      list.forEach((t) => (map[t.email] = t));
-      setTrusted(map);
+      list.forEach((t) => (map[t.email] = { ...t, verified: t.verified ?? t.method !== 'tofu' }));
+      trustedRef.current = { ...map, ...trustedRef.current };
+      setTrusted(trustedRef.current);
     });
     getConversationMetas().then((list) => {
       if (cancelled) return;
@@ -224,6 +316,9 @@ export default function useMessenger({ me, identity, preferences }) {
   const handleIncoming = useCallback(
     async (type, id, data) => {
       if (type !== 'added') return;
+      // Bu cihazın anahtarına şifrelenmemiş mesaja dokunma: aynı hesabın yeni anahtarlı cihazına aittir.
+      // (Silersek o cihaz mesajı hiç alamaz.)
+      if (data.toPub !== identity.publicKey) return;
       if (processed.current.has(id) || (await hasLocal(id))) {
         processed.current.add(id);
         await finalizeIncoming(id, data);
@@ -231,6 +326,7 @@ export default function useMessenger({ me, identity, preferences }) {
       }
 
       const sender = data.from;
+      await ensureContact(sender, data.fromCode);
       const base = {
         id,
         conversationId: conversationIdFor(myEmail, sender),
@@ -243,9 +339,7 @@ export default function useMessenger({ me, identity, preferences }) {
 
       let msg;
       try {
-        if (data.toPub !== identity.publicKey) {
-          throw new Error('Bu mesaj bu cihazın eski bir anahtarına şifrelenmiş.');
-        }
+        const pinned = await pinIfNew(sender, data.fromPub);
         const key = await getKey(sender, data.fromPub);
         const header = await decryptJSON(key, data.header, headerAad(id, sender, myEmail));
         let mediaBlob = null;
@@ -262,7 +356,8 @@ export default function useMessenger({ me, identity, preferences }) {
           mimeType: header.mimeType || null,
           timestamp: header.ts || base.timestamp,
           mediaBlob,
-          unverifiedSender: trustedRef.current[sender]?.publicKey !== data.fromPub,
+          // Sabitlenen anahtardan farklı bir anahtarla geldiyse uyar
+          keyMismatch: Boolean(pinned && pinned.publicKey !== data.fromPub),
         };
       } catch (err) {
         console.error('Gelen mesaj çözülemedi:', err);
@@ -280,7 +375,7 @@ export default function useMessenger({ me, identity, preferences }) {
       }
       await finalizeIncoming(id, data);
     },
-    [myEmail, identity, getKey, hasLocal, persist, showInView, bumpMeta, finalizeIncoming]
+    [myEmail, identity, getKey, hasLocal, persist, showInView, bumpMeta, finalizeIncoming, ensureContact, pinIfNew]
   );
 
   // ---------- Giden kutusu (teslim tikleri + başka cihazdan geri yükleme) ----------
@@ -303,6 +398,8 @@ export default function useMessenger({ me, identity, preferences }) {
       // Sunucuda saklanan, bu cihazda olmayan kendi mesajımız: geri yükle
       if (data.fromPub !== identity.publicKey) return;
       try {
+        await ensureContact(data.to, data.toCode);
+        await pinIfNew(data.to, data.toPub);
         const key = await getKey(data.to, data.toPub);
         const header = await decryptJSON(key, data.header, headerAad(id, myEmail, data.to));
         let mediaBlob = null;
@@ -332,7 +429,7 @@ export default function useMessenger({ me, identity, preferences }) {
         console.warn('Giden mesaj geri yüklenemedi:', err);
       }
     },
-    [identity, myEmail, getKey, hasLocal, persist, patchMessage, showInView, bumpMeta]
+    [identity, myEmail, getKey, hasLocal, persist, patchMessage, showInView, bumpMeta, ensureContact, pinIfNew]
   );
 
   useEffect(() => {
@@ -389,11 +486,15 @@ export default function useMessenger({ me, identity, preferences }) {
   // ---------- Gönderim ----------
   const send = useCallback(
     async (to, content) => {
-      const trustedKey = trustedRef.current[to]?.publicKey;
-      const publishedKey = usersRef.current[to]?.publicKey;
-      if (contactKeyStatus(publishedKey, trustedKey) !== 'verified') {
-        throw new Error('Bu kişinin anahtarı doğrulanmadan mesaj gönderilemez.');
+      let publishedKey = usersRef.current[to]?.publicKey;
+      if (!publishedKey) publishedKey = (await fetchProfile(to))?.publicKey;
+      const pinned = await pinIfNew(to, publishedKey);
+      const status = contactKeyStatus(publishedKey, pinned);
+      if (status === 'no-key') throw new Error('Bu kişi henüz uygulamaya giriş yapmadı.');
+      if (status === 'changed') {
+        throw new Error('Bu kişinin güvenlik anahtarı değişti. Göndermeden önce yeni anahtarı onaylayın.');
       }
+      const trustedKey = pinned.publicKey;
 
       const id = newMessageId();
       const ts = Date.now();
@@ -437,6 +538,8 @@ export default function useMessenger({ me, identity, preferences }) {
             to,
             fromPub: identity.publicKey,
             toPub: trustedKey,
+            fromCode: myCodeRef.current,
+            toCode: myContactsRef.current[to]?.code || null,
             keepOnServer: Boolean(prefsRef.current.serverStorageEnabled),
             header,
             media,
@@ -453,7 +556,7 @@ export default function useMessenger({ me, identity, preferences }) {
         await patchMessage(id, { status: 'failed', error: reason });
       }
     },
-    [myEmail, identity, getKey, persist, showInView, bumpMeta, patchMessage]
+    [myEmail, identity, getKey, persist, showInView, bumpMeta, patchMessage, pinIfNew, fetchProfile]
   );
 
   const sendText = useCallback(
@@ -490,13 +593,65 @@ export default function useMessenger({ me, identity, preferences }) {
     [send]
   );
 
-  // ---------- Kişi doğrulama ----------
-  const trustContact = useCallback(
-    async (email, publicKey, method) => {
-      await saveTrustedContact(myEmail, email, publicKey, method);
-      setTrusted((prev) => ({ ...prev, [email]: { email, publicKey, method, verifiedAt: Date.now() } }));
+  // ---------- Kişi ekleme (kod ile, ya da kişi izin verdiyse e-posta ile) ----------
+  const addContact = useCallback(
+    async (rawInput) => {
+      const input = (rawInput || '').trim();
+      let profile;
+      try {
+        if (input.includes('@')) {
+          const email = normalizeEmail(input);
+          if (!EMAIL_RE.test(email)) throw new Error('Geçerli bir e-posta adresi yazın.');
+          if (email === myEmail) throw new Error('Kendi adresinizi yazdınız.');
+          profile = await lookupByEmail(email);
+          if (!profile?.code) {
+            throw new Error(
+              'Bu e-postayla bulunabilen bir kullanıcı yok. Kişi e-postayla bulunmayı kapatmış olabilir; ondan kişi kodunu isteyin.'
+            );
+          }
+        } else {
+          const code = normalizeCode(input);
+          if (!code) throw new Error('Kod 8 karakter olmalı (ör. 7K3Q-9XW2).');
+          if (code === myCodeRef.current) throw new Error('Bu sizin kendi kodunuz.');
+          profile = await lookupByCode(code);
+          if (!profile) throw new Error('Bu koda sahip bir kullanıcı bulunamadı. Kodu kontrol edin.');
+        }
+      } catch (err) {
+        if (err instanceof Error && !err.code) throw err;
+        throw new Error('Kişi aranamadı. İnternet bağlantınızı kontrol edin.');
+      }
+      const email = profile.email;
+      if (email === myEmail) throw new Error('Bu sizin kendi kodunuz.');
+      setUsers((prev) => ({ ...prev, [email]: { ...profile } }));
+      await ensureContact(email, profile.code, profile.displayName);
+      await pinIfNew(email, profile.publicKey);
+      return email;
+    },
+    [myEmail, ensureContact, pinIfNew]
+  );
+
+  const removeContact = useCallback(
+    async (email) => {
+      await removeMyContact(myEmail, email);
+      const next = { ...myContactsRef.current };
+      delete next[email];
+      myContactsRef.current = next;
+      setMyContacts(next);
+      if (activeRef.current === email) {
+        setActiveEmail(null);
+        setMessages([]);
+      }
     },
     [myEmail]
+  );
+
+  // ---------- Kişi doğrulama (isteğe bağlı) ----------
+  const trustContact = useCallback(
+    async (email, publicKey, method) => {
+      const rec = await saveTrustedContact(myEmail, email, publicKey, method, method !== 'tofu');
+      setTrustedRecord(email, rec);
+    },
+    [myEmail, setTrustedRecord]
   );
 
   const verifyByCode = useCallback(
@@ -504,10 +659,11 @@ export default function useMessenger({ me, identity, preferences }) {
       const parsed = decodeVerifyCode(codeText);
       if (!parsed) throw new Error('Bu bir napisen doğrulama kodu değil.');
       if (parsed.email === myEmail) throw new Error('Kendi kodunuzu okuttunuz. Karşı tarafın kodunu okutun.');
-      if (!allowlist.emails.includes(parsed.email)) {
-        throw new Error(`${parsed.email} izin listesinde değil.`);
+      let published = usersRef.current[parsed.email]?.publicKey;
+      if (!published && parsed.code) {
+        const p = await lookupByCode(parsed.code).catch(() => null);
+        if (p?.email === parsed.email) published = p.publicKey;
       }
-      const published = usersRef.current[parsed.email]?.publicKey;
       if (!published) {
         throw new Error('Bu kişi henüz uygulamaya giriş yapıp anahtarını yayınlamamış.');
       }
@@ -516,10 +672,11 @@ export default function useMessenger({ me, identity, preferences }) {
           'QR koddaki anahtar sunucudaki anahtarla eşleşmiyor. Karşı taraf uygulamayı yeniden açıp tekrar denesin; sorun sürerse bağlantı güvenli olmayabilir.'
         );
       }
+      await ensureContact(parsed.email, parsed.code);
       await trustContact(parsed.email, parsed.publicKey, 'qr');
       return parsed.email;
     },
-    [myEmail, allowlist, trustContact]
+    [myEmail, trustContact, ensureContact]
   );
 
   const verifyBySafetyNumber = useCallback(
@@ -531,31 +688,38 @@ export default function useMessenger({ me, identity, preferences }) {
     [trustContact]
   );
 
+  // Anahtar değiştiğinde yeni anahtarı kabul et (doğrulanmamış olarak)
+  const acceptNewKey = useCallback(
+    async (email) => {
+      const published = usersRef.current[email]?.publicKey;
+      if (!published) throw new Error('Bu kişinin anahtarı yok.');
+      await trustContact(email, published, 'tofu');
+    },
+    [trustContact]
+  );
+
   const unverifyContact = useCallback(
     async (email) => {
-      await removeTrustedContact(myEmail, email);
-      setTrusted((prev) => {
-        const next = { ...prev };
-        delete next[email];
-        return next;
-      });
+      const rec = trustedRef.current[email];
+      if (rec) await trustContact(email, rec.publicKey, 'tofu');
     },
-    [myEmail]
+    [trustContact]
   );
 
   // ---------- Kişi listesi ----------
   const contacts = useMemo(
     () =>
-      allowlist.emails
+      Object.keys(myContacts)
         .filter((e) => e !== myEmail)
         .map((email) => {
           const profile = users[email];
           const meta = metas[email] || {};
           return {
             email,
-            name: profile?.displayName || email.split('@')[0],
+            name: profile?.displayName || myContacts[email]?.name || 'İsimsiz kişi',
+            code: myContacts[email]?.code || null,
             publicKey: profile?.publicKey || null,
-            keyStatus: contactKeyStatus(profile?.publicKey, trusted[email]?.publicKey),
+            keyStatus: contactKeyStatus(profile?.publicKey, trusted[email]),
             unreadCount: meta.unread || 0,
             lastMessageText: meta.lastText || '',
             lastMessageType: meta.lastType || null,
@@ -563,7 +727,7 @@ export default function useMessenger({ me, identity, preferences }) {
           };
         })
         .sort((a, b) => b.lastMessageTs - a.lastMessageTs || a.name.localeCompare(b.name, 'tr')),
-    [allowlist, users, metas, trusted, myEmail]
+    [myContacts, users, metas, trusted, myEmail]
   );
 
   const clearMemory = useCallback(() => {
@@ -575,7 +739,6 @@ export default function useMessenger({ me, identity, preferences }) {
   }, []);
 
   return {
-    allowlist,
     contacts,
     activeEmail,
     messages,
@@ -588,6 +751,9 @@ export default function useMessenger({ me, identity, preferences }) {
     verifyByCode,
     verifyBySafetyNumber,
     unverifyContact,
+    acceptNewKey,
+    addContact,
+    removeContact,
     trusted,
     clearMemory,
   };

@@ -405,6 +405,28 @@ export function subscribeMessages(field, email, onChange, onError) {
   );
 }
 
+// ---------- "Yazıyor..." göstergesi ----------
+export function setTyping(to, from) {
+  return setDoc(doc(db, 'typing', to, 'from', from), { at: serverTimestamp() });
+}
+
+export function clearTyping(to, from) {
+  return deleteDoc(doc(db, 'typing', to, 'from', from));
+}
+
+// callback(gönderen e-postası, yazıyor mu)
+export function subscribeTyping(me, callback) {
+  return onSnapshot(
+    collection(db, 'typing', me, 'from'),
+    (snap) => {
+      for (const change of snap.docChanges()) {
+        callback(change.doc.id, change.type !== 'removed');
+      }
+    },
+    (err) => console.warn('Yazıyor bilgisi dinlenemedi:', err?.code)
+  );
+}
+
 // ---------- Cihaz taşıma ----------
 const transferRef = (email) => doc(db, 'transfers', email);
 

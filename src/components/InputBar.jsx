@@ -5,7 +5,7 @@ import { audioRecorder } from '../services/audio';
 import { prepareImage } from '../services/media';
 import { MAX_TEXT_LENGTH } from '../hooks/useMessenger';
 
-export default function InputBar({ disabled, disabledReason, onSendText, onSendAudio, onSendImage, onError }) {
+export default function InputBar({ disabled, disabledReason, onSendText, onSendAudio, onSendImage, onError, onTyping }) {
   const [text, setText] = useState('');
   const [isRecording, setIsRecording] = useState(false);
   const [recordSeconds, setRecordSeconds] = useState(0);
@@ -15,6 +15,11 @@ export default function InputBar({ disabled, disabledReason, onSendText, onSendA
 
   // Bileşen kapanırsa mikrofonu mutlaka serbest bırak
   useEffect(() => () => audioRecorder.cancelRecording(), []);
+
+  // Sohbetten çıkınca "yazıyor" durumunu bitir
+  const onTypingRef = useRef(onTyping);
+  onTypingRef.current = onTyping;
+  useEffect(() => () => onTypingRef.current?.(false), []);
 
   const handleSendText = (e) => {
     if (e) e.preventDefault();
@@ -164,7 +169,11 @@ export default function InputBar({ disabled, disabledReason, onSendText, onSendA
             <input
               type="text"
               value={text}
-              onChange={(e) => setText(e.target.value)}
+              onChange={(e) => {
+                setText(e.target.value);
+                onTyping?.(e.target.value.trim().length > 0);
+              }}
+              onBlur={() => onTyping?.(false)}
               onKeyDown={handleKeyDown}
               placeholder={preparing ? 'Görsel hazırlanıyor...' : 'Bir mesaj yazın...'}
               maxLength={MAX_TEXT_LENGTH}

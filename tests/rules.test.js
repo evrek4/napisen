@@ -339,6 +339,22 @@ describe('Mesajlar', () => {
   });
 });
 
+describe('Yazıyor göstergesi', () => {
+  const t = () => ({ at: serverTimestamp() });
+  it('gönderen yazar, yalnızca alıcı okur', async () => {
+    await assertSucceeds(setDoc(doc(ctx('a@x.com'), 'typing/b@x.com/from/a@x.com'), t()));
+    await assertSucceeds(getDocs(collection(ctx('b@x.com'), 'typing/b@x.com/from')));
+    await assertFails(getDocs(collection(ctx('c@x.com'), 'typing/b@x.com/from')));
+    await assertFails(getDoc(doc(ctx('a@x.com'), 'typing/b@x.com/from/a@x.com')));
+  });
+  it('başkası adına yazılamaz; engellenen kişi ve kayıtsız alıcı için yazılamaz', async () => {
+    await assertFails(setDoc(doc(ctx('c@x.com'), 'typing/b@x.com/from/a@x.com'), t()));
+    await assertFails(setDoc(doc(ctx('a@x.com'), 'typing/yok@x.com/from/a@x.com'), t()));
+    await assertSucceeds(setDoc(doc(ctx('b@x.com'), 'blocks/b@x.com/list/a@x.com'), { at: serverTimestamp() }));
+    await assertFails(setDoc(doc(ctx('a@x.com'), 'typing/b@x.com/from/a@x.com'), t()));
+  });
+});
+
 describe('Hesap silme', () => {
   it('kullanıcı kendi profilini ve kodunu silebilir; başkasınınkini silemez', async () => {
     await assertFails(deleteDoc(doc(ctx('b@x.com'), 'users/a@x.com')));

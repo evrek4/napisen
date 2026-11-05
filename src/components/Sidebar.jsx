@@ -162,6 +162,10 @@ export default function Sidebar({
 
                   <div className="flex items-center justify-between mt-1">
                     <p className="flex items-center gap-1 text-xs text-[#8696a0] truncate">
+                      {contact.typing ? (
+                        <span className="font-medium text-[#00a884]">yazıyor...</span>
+                      ) : (
+                      <>
                       {contact.lastMessageType === 'audio' && (
                         <>
                           <Mic className="h-3.5 w-3.5 text-[#00a884]" />
@@ -183,6 +187,8 @@ export default function Sidebar({
                                 ? 'Güvenlik anahtarı değişti'
                                 : contact.code || 'Uçtan uca şifreli')}
                         </span>
+                      )}
+                      </>
                       )}
                     </p>
 

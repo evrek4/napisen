@@ -19,6 +19,8 @@ import {
   UserX,
   AtSign,
   RefreshCw,
+  Volume2,
+  Keyboard,
 } from 'lucide-react';
 import QrScanner from './QrScanner';
 import MyCodeCard from './MyCodeCard';
@@ -28,11 +30,7 @@ import ModerationPanel from './ModerationPanel';
 import RolesPanel from './RolesPanel';
 import LegalLinks from './LegalLinks';
 import { publicKeyFingerprint } from '../services/crypto';
-import {
-  notificationPermission,
-  notificationsSupported,
-  requestNotificationPermission,
-} from '../services/notify';
+import { notificationsSupported } from '../services/notify';
 
 
 function Toggle({ on, onClick, label }) {
@@ -70,6 +68,8 @@ export default function SettingsModal({
   onSendTransfer,
   onVerifyContact,
   onHistoryCleared,
+  notifPerm,
+  onRequestNotifications,
   onClose,
   onLogout,
 }) {
@@ -79,7 +79,7 @@ export default function SettingsModal({
   const isMod = role === 'admin' || role === 'moderator';
   const [storageStats, setStorageStats] = useState({ usageMB: '0.00', quotaMB: 'N/A' });
   const [fingerprint, setFingerprint] = useState('');
-  const [notifPerm, setNotifPerm] = useState(notificationPermission());
+
   const [transferOpen, setTransferOpen] = useState(false);
   const [transferMsg, setTransferMsg] = useState({ type: '', text: '' });
   const [transferBusy, setTransferBusy] = useState(false);
@@ -253,31 +253,79 @@ export default function SettingsModal({
                 />
               </div>
 
+              <div className="rounded-xl bg-[#182229] p-4 border border-[#2a3942] space-y-3">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex gap-3">
+                    <Bell className="h-5 w-5 text-[#00a884] shrink-0 mt-0.5" />
+                    <div>
+                      <h4 className="text-sm font-semibold">Yeni mesaj bildirimleri</h4>
+                      <p className="mt-1 text-xs leading-relaxed text-[#8696a0]">
+                        Uygulama açıkken ekranda uyarı, arka plandayken sistem bildirimi gösterilir. Mesaj içeriği
+                        bildirimde görünmez.
+                      </p>
+                    </div>
+                  </div>
+                  <Toggle
+                    on={preferences.notifications !== false}
+                    onClick={async () => {
+                      const turningOn = preferences.notifications === false;
+                      onTogglePreference('notifications');
+                      if (turningOn && notifPerm === 'default') onRequestNotifications?.();
+                    }}
+                    label="Bildirimler"
+                  />
+                </div>
+
+                {preferences.notifications !== false && (
+                  <>
+                    <div className="flex items-center justify-between gap-4 border-t border-[#222d34] pt-3">
+                      <span className="flex items-center gap-2 text-xs">
+                        <Volume2 className="h-4 w-4 text-[#8696a0]" /> Bildirim sesi
+                      </span>
+                      <Toggle
+                        on={preferences.notificationSound !== false}
+                        onClick={() => onTogglePreference('notificationSound')}
+                        label="Bildirim sesi"
+                      />
+                    </div>
+                    <div className="flex items-center justify-between gap-4 border-t border-[#222d34] pt-3 text-xs">
+                      <span className="text-[#8696a0]">Sistem bildirimi izni (arka plan için)</span>
+                      {!notificationsSupported() ? (
+                        <span className="text-[#8696a0]">Desteklenmiyor</span>
+                      ) : notifPerm === 'granted' ? (
+                        <span className="text-[#00a884]">Verildi</span>
+                      ) : notifPerm === 'denied' ? (
+                        <span className="text-right text-red-300">
+                          Tarayıcıda engelli — adres çubuğundaki kilit simgesinden izin verin
+                        </span>
+                      ) : (
+                        <button
+                          onClick={onRequestNotifications}
+                          className="rounded-lg bg-[#00a884] px-3 py-1.5 font-semibold text-[#111b21] cursor-pointer"
+                        >
+                          İzin ver
+                        </button>
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
+
               <div className="rounded-xl bg-[#182229] p-4 border border-[#2a3942] flex items-start justify-between gap-4">
                 <div className="flex gap-3">
-                  <Bell className="h-5 w-5 text-[#00a884] shrink-0 mt-0.5" />
+                  <Keyboard className="h-5 w-5 text-[#53bdeb] shrink-0 mt-0.5" />
                   <div>
-                    <h4 className="text-sm font-semibold">Bildirimler</h4>
+                    <h4 className="text-sm font-semibold">"Yazıyor..." bilgisini gönder</h4>
                     <p className="mt-1 text-xs leading-relaxed text-[#8696a0]">
-                      Uygulama açıkken arka plandayken yeni mesaj bildirimi gösterir. Mesaj içeriği bildirimde
-                      görünmez.
+                      Mesaj yazarken karşı taraf sohbet başlığında "yazıyor..." görür. Kapatırsanız gönderilmez.
                     </p>
                   </div>
                 </div>
-                {!notificationsSupported() ? (
-                  <span className="text-[11px] text-[#8696a0]">Desteklenmiyor</span>
-                ) : notifPerm === 'granted' ? (
-                  <span className="text-[11px] text-[#00a884]">Açık</span>
-                ) : notifPerm === 'denied' ? (
-                  <span className="text-[11px] text-red-300 text-right">Tarayıcıda engelli</span>
-                ) : (
-                  <button
-                    onClick={async () => setNotifPerm(await requestNotificationPermission())}
-                    className="rounded-lg bg-[#00a884] px-3 py-1.5 text-xs font-semibold text-[#111b21] cursor-pointer"
-                  >
-                    Aç
-                  </button>
-                )}
+                <Toggle
+                  on={preferences.sendTyping !== false}
+                  onClick={() => onTogglePreference('sendTyping')}
+                  label="Yazıyor bilgisini gönder"
+                />
               </div>
             </>
           )}

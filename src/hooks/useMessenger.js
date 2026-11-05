@@ -12,6 +12,9 @@ import {
   blockUser,
   unblockUser,
   createReport,
+  setTyping,
+  clearTyping,
+  subscribeTyping,
   uploadMessage,
   downloadMediaBytes,
   deleteMessageFromServer,
@@ -43,7 +46,6 @@ import {
   saveMyContact,
   removeMyContact,
 } from '../services/db';
-import { showMessageNotification } from '../services/notify';
 import { MAX_MEDIA_BYTES } from '../services/media';
 
 export const MAX_TEXT_LENGTH = 4000;
@@ -79,7 +81,7 @@ export function contactKeyStatus(publishedKey, trustedRecord) {
 
 export const canMessage = (status) => status === 'verified' || status === 'unverified';
 
-export default function useMessenger({ me, identity, myCode, preferences }) {
+export default function useMessenger({ me, identity, myCode, preferences, onIncoming }) {
   const [myContacts, setMyContacts] = useState({});
   const [users, setUsers] = useState({});
   const [trusted, setTrusted] = useState({});
@@ -104,6 +106,8 @@ export default function useMessenger({ me, identity, myCode, preferences }) {
   myContactsRef.current = myContacts;
   const myCodeRef = useRef(myCode);
   myCodeRef.current = myCode;
+  const onIncomingRef = useRef(onIncoming);
+  onIncomingRef.current = onIncoming;
 
   const keyCache = useRef(new Map());
   const memStore = useRef(new Map()); // Hayalet Mod: id -> mesaj (yalnızca RAM)
@@ -208,6 +212,58 @@ export default function useMessenger({ me, identity, myCode, preferences }) {
     },
     [writeMeta]
   );
+
+  // ---------- "Yazıyor..." göstergesi ----------
+  // Karşı tarafın yazdığı, son güncellemeden sonra 6 saniye boyunca gösterilir (saat farkından etkilenmez)
+  const TYPING_TTL = 6000;
+  const [typingSeen, setTypingSeen] = useState({}); // email -> yerel alınma zamanı
+  const [tick, setTick] = useState(0);
+  useEffect(
+    () =>
+      subscribeTyping(myEmail, (email, active) =>
+        setTypingSeen((prev) => {
+          const next = { ...prev };
+          if (active) next[email] = Date.now();
+          else delete next[email];
+          return next;
+        })
+      ),
+    [myEmail]
+  );
+  const anyTyping = Object.keys(typingSeen).length > 0;
+  useEffect(() => {
+    if (!anyTyping) return undefined;
+    const t = setInterval(() => setTick((n) => n + 1), 1000);
+    return () => clearInterval(t);
+  }, [anyTyping]);
+
+  // Kendi yazma durumumuzu gönder (en fazla 3 saniyede bir)
+  const lastTypingSent = useRef({});
+  const notifyTyping = useCallback(
+    (to, active) => {
+      if (!to || !prefsRef.current.sendTyping || blockedRef.current.has(to)) return;
+      const last = lastTypingSent.current[to] || 0;
+      if (active) {
+        if (Date.now() - last < 3000) return;
+        lastTypingSent.current[to] = Date.now();
+        setTyping(to, myEmail).catch(() => {});
+      } else if (last) {
+        lastTypingSent.current[to] = 0;
+        clearTyping(to, myEmail).catch(() => {});
+      }
+    },
+    [myEmail]
+  );
+
+  // Gelen mesaj, "yazıyor" durumunu hemen bitirir
+  const clearTypingFor = useCallback((email) => {
+    setTypingSeen((prev) => {
+      if (!prev[email]) return prev;
+      const next = { ...prev };
+      delete next[email];
+      return next;
+    });
+  }, []);
 
   // ---------- Engellenenler ----------
   useEffect(() => subscribeBlocks(myEmail, setBlocked), [myEmail]);
@@ -387,17 +443,26 @@ export default function useMessenger({ me, identity, myCode, preferences }) {
       }
 
       processed.current.add(id);
+      clearTypingFor(sender);
       await persist(msg);
       showInView(msg);
       const isViewing = activeRef.current === sender && !document.hidden;
       await bumpMeta(msg, { unread: !isViewing });
       if (!isViewing) {
-        const name = usersRef.current[sender]?.displayName || sender;
-        showMessageNotification(name);
+        // İlk kez yazan kişinin profili henüz yüklenmemiş olabilir: kodundan adını al
+        if (!usersRef.current[sender]?.displayName && data.fromCode) {
+          const p = await lookupByCode(data.fromCode).catch(() => null);
+          if (p?.email === sender) {
+            usersRef.current = { ...usersRef.current, [sender]: p };
+            setUsers((prev) => ({ ...prev, [sender]: prev[sender] || p }));
+          }
+        }
+        const name = usersRef.current[sender]?.displayName || myContactsRef.current[sender]?.name || 'Bir kişi';
+        onIncomingRef.current?.({ sender, name });
       }
       await finalizeIncoming(id, data);
     },
-    [myEmail, identity, getKey, hasLocal, persist, showInView, bumpMeta, finalizeIncoming, ensureContact, pinIfNew]
+    [myEmail, identity, getKey, hasLocal, persist, showInView, bumpMeta, finalizeIncoming, ensureContact, pinIfNew, clearTypingFor]
   );
 
   // ---------- Giden kutusu (teslim tikleri + başka cihazdan geri yükleme) ----------
@@ -509,6 +574,7 @@ export default function useMessenger({ me, identity, myCode, preferences }) {
   const send = useCallback(
     async (to, content) => {
       if (blockedRef.current.has(to)) throw new Error('Bu kişiyi engellediniz. Mesaj göndermek için engeli kaldırın.');
+      notifyTyping(to, false);
       let publishedKey = usersRef.current[to]?.publicKey;
       if (!publishedKey) publishedKey = (await fetchProfile(to))?.publicKey;
       const pinned = await pinIfNew(to, publishedKey);
@@ -587,7 +653,7 @@ export default function useMessenger({ me, identity, myCode, preferences }) {
         await patchMessage(id, { status: 'failed', error: reason });
       }
     },
-    [myEmail, identity, getKey, persist, showInView, bumpMeta, patchMessage, pinIfNew, fetchProfile]
+    [myEmail, identity, getKey, persist, showInView, bumpMeta, patchMessage, pinIfNew, fetchProfile, notifyTyping]
   );
 
   const sendText = useCallback(
@@ -752,6 +818,7 @@ export default function useMessenger({ me, identity, myCode, preferences }) {
             publicKey: profile?.publicKey || null,
             keyStatus: contactKeyStatus(profile?.publicKey, trusted[email]),
             blocked: blocked.has(email),
+            typing: Boolean(typingSeen[email] && Date.now() - typingSeen[email] < TYPING_TTL),
             unreadCount: meta.unread || 0,
             lastMessageText: meta.lastText || '',
             lastMessageType: meta.lastType || null,
@@ -759,7 +826,9 @@ export default function useMessenger({ me, identity, myCode, preferences }) {
           };
         })
         .sort((a, b) => b.lastMessageTs - a.lastMessageTs || a.name.localeCompare(b.name, 'tr')),
-    [myContacts, users, metas, trusted, myEmail, blocked]
+    // tick: "yazıyor" süresinin dolmasını yansıtmak için saniyede bir yeniden hesaplanır
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [myContacts, users, metas, trusted, myEmail, blocked, typingSeen, tick]
   );
 
   // ---------- Engelleme ve şikâyet ----------
@@ -825,6 +894,7 @@ export default function useMessenger({ me, identity, myCode, preferences }) {
     block,
     unblock,
     report,
+    notifyTyping,
     trusted,
     clearMemory,
   };

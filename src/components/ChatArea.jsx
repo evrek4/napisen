@@ -30,6 +30,7 @@ export default function ChatArea({
   onBlock,
   onUnblock,
   onReport,
+  onTyping,
   onSendText,
   onSendAudio,
   onSendImage,
@@ -133,7 +134,9 @@ export default function ChatArea({
                 <Lock className="h-3 w-3 shrink-0" />
               )}
               <span className="truncate">
-                {keyStatus === 'verified'
+                {activeContact.typing ? (
+                  <span className="text-[#00a884]">yazıyor...</span>
+                ) : keyStatus === 'verified'
                   ? 'Doğrulandı'
                   : keyStatus === 'changed'
                     ? 'Anahtar değişti!'
@@ -300,6 +303,7 @@ export default function ChatArea({
             : 'Bu kişi henüz uygulamaya giriş yapmadı'
         }
         onError={onError}
+        onTyping={onTyping}
         onSendText={onSendText}
         onSendAudio={onSendAudio}
         onSendImage={onSendImage}

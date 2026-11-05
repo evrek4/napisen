@@ -7,6 +7,9 @@ const PREFS_KEY = 'napisen_user_preferences';
 export const DEFAULT_PREFERENCES = {
   serverStorageEnabled: false, // Varsayılan: Sunucuda saklanmaz (0 Bayt, Burn-after-delivery)
   dontStoreOnDevice: false,    // Varsayılan: Cihaz yerel veritabanında saklanır
+  sendTyping: true,            // "Yazıyor..." bilgisini karşı tarafa gönder
+  notifications: true,         // Yeni mesaj bildirimleri
+  notificationSound: true,     // Bildirim sesi
 };
 
 export function getPreferences() {

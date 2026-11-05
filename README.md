@@ -18,6 +18,8 @@
 | **Sunucu kuralları** | Kimse başkası adına mesaj yazamaz, başkasının mesajını okuyamaz veya başkasının açık anahtarını değiştiremez. Kurallar `tests/rules.test.js` ile test edilir. |
 
 ### Gizlilik seçenekleri
+* **Yeni mesaj bildirimleri** (varsayılan: açık): Uygulama açıkken ekranda uyarı, arka plandayken sistem bildirimi (mesaj içeriği gösterilmez). Bildirim sesi ayrıca kapatılabilir.
+* **"Yazıyor..." bilgisini gönder** (varsayılan: açık): Karşı taraf yazarken sohbet başlığında ve listede "yazıyor..." görünür. Bu bilgi şifreli değildir; yalnızca alıcı okuyabilir.
 * **E-posta adresimle bulunabilirim** (varsayılan: kapalı): Açıkken e-postanızı bilen izinli kullanıcılar da sizi bulabilir.
 * **Sunucuda Sakla** (varsayılan: kapalı): Kapalıyken mesaj teslim edildiği an sunucudan silinir. Açıkken şifreli kopya sunucuda kalır; yeni cihaza taşındığınızda geçmiş geri yüklenir.
 * **Hayalet Mod** (varsayılan: kapalı): Açıkken mesajlar cihaz hafızasına yazılmaz, sayfa kapanınca kaybolur.

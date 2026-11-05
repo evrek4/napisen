@@ -250,6 +250,20 @@ service cloud.firestore {
       }
     }
 
+    // ---------- "Yazıyor..." göstergesi ----------
+    // typing/{alıcı}/from/{gönderen} = { at }. Yalnızca alıcı okur; engellenen kişi yazamaz.
+    match /typing/{to}/from/{from} {
+      allow get, list: if signedIn() && to == me();
+      allow create, update: if allowed()
+        && from == me()
+        && to != me()
+        && reachable(to)
+        && !blockedBy(to, me())
+        && request.resource.data.keys().hasOnly(['at'])
+        && request.resource.data.at == request.time;
+      allow delete: if signedIn() && (from == me() || to == me());
+    }
+
     // ---------- Cihaz taşıma (şifreli, tek kullanımlık) ----------
     match /transfers/{email} {
       allow get, delete: if signedIn() && email == me();

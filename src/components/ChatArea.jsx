@@ -1,5 +1,5 @@
 // napisen - Aktif Sohbet Alanı (Gizlilik Kontrolleri Dahil)
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   ArrowLeft,
   Shield,
@@ -11,6 +11,9 @@ import {
   ShieldAlert,
   ShieldCheck,
   ShieldQuestion,
+  MoreVertical,
+  Flag,
+  Ban,
 } from 'lucide-react';
 import MessageBubble from './MessageBubble';
 import { canMessage } from '../hooks/useMessenger';
@@ -24,6 +27,9 @@ export default function ChatArea({
   onBack,
   onVerify,
   onAcceptKey,
+  onBlock,
+  onUnblock,
+  onReport,
   onSendText,
   onSendAudio,
   onSendImage,
@@ -71,7 +77,8 @@ export default function ChatArea({
 
   const initial = (activeContact.name || activeContact.email)[0].toUpperCase();
   const keyStatus = activeContact.keyStatus;
-  const canSend = canMessage(keyStatus);
+  const isBlocked = Boolean(activeContact.blocked);
+  const canSend = canMessage(keyStatus) && !isBlocked;
 
   return (
     <div className="flex flex-1 flex-col h-full bg-[#0b141a] overflow-hidden select-none">
@@ -123,7 +130,7 @@ export default function ChatArea({
           </div>
         </div>
 
-        {/* HIZLI GİZLİLİK BUTONLARI (KULLANICININ İSTEDİĞİ İKİ SEÇENEK) */}
+        {/* HIZLI GİZLİLİK BUTONLARI + MENÜ */}
         <div className="flex shrink-0 items-center gap-2">
           {/* 1. Sunucuda Sakla Rozeti */}
           <button
@@ -156,6 +163,13 @@ export default function ChatArea({
             <span className="hidden sm:inline">Cihazda:</span>
             <span className="hidden sm:inline">{preferences.dontStoreOnDevice ? 'Tutulmasın (Hayalet)' : 'Saklanıyor'}</span>
           </button>
+          <ChatMenu
+            blocked={isBlocked}
+            onVerify={onVerify}
+            onBlock={onBlock}
+            onUnblock={onUnblock}
+            onReport={onReport}
+          />
         </div>
       </div>
 
@@ -207,6 +221,17 @@ export default function ChatArea({
               </div>
             </div>
           )}
+          {isBlocked && (
+            <div className="max-w-md rounded-xl bg-[#182229] px-3.5 py-2.5 text-center text-xs text-[#e9edef] border border-[#2a3942] space-y-2">
+              <p>
+                <Ban className="inline h-3.5 w-3.5 mr-1 text-red-400" />
+                Bu kişiyi engellediniz. Size mesaj gönderemez, siz de gönderemezsiniz.
+              </p>
+              <button onClick={onUnblock} className="rounded-lg bg-[#202c33] px-3 py-1.5 text-[11px] font-semibold cursor-pointer">
+                Engeli kaldır
+              </button>
+            </div>
+          )}
           {keyStatus === 'no-key' && (
             <div className="max-w-md rounded-xl bg-[#182229] px-3.5 py-2 text-center text-xs text-[#8696a0] border border-[#2a3942]">
               {activeContact.name} henüz uygulamaya giriş yapmadı.
@@ -242,7 +267,9 @@ export default function ChatArea({
         key={activeContact.email}
         disabled={!canSend}
         disabledReason={
-          keyStatus === 'changed'
+          isBlocked
+            ? 'Bu kişiyi engellediniz'
+            : keyStatus === 'changed'
             ? 'Göndermek için yukarıdan yeni anahtarı onaylayın'
             : 'Bu kişi henüz uygulamaya giriş yapmadı'
         }
@@ -251,6 +278,53 @@ export default function ChatArea({
         onSendAudio={onSendAudio}
         onSendImage={onSendImage}
       />
+    </div>
+  );
+}
+
+function ChatMenu({ blocked, onVerify, onBlock, onUnblock, onReport }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const close = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+    };
+    document.addEventListener('pointerdown', close);
+    return () => document.removeEventListener('pointerdown', close);
+  }, [open]);
+
+  const item = (Icon, label, fn, danger) => (
+    <button
+      onClick={() => {
+        setOpen(false);
+        fn();
+      }}
+      className={`flex w-full items-center gap-2 px-3 py-2.5 text-left text-xs hover:bg-[#2a3942] cursor-pointer ${
+        danger ? 'text-red-300' : 'text-[#e9edef]'
+      }`}
+    >
+      <Icon className="h-4 w-4" /> {label}
+    </button>
+  );
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        aria-label="Sohbet menüsü"
+        className="flex h-8 w-8 items-center justify-center rounded-full text-[#aebac1] hover:bg-[#374248] cursor-pointer"
+      >
+        <MoreVertical className="h-5 w-5" />
+      </button>
+      {open && (
+        <div className="absolute right-0 top-10 z-30 w-48 overflow-hidden rounded-xl border border-[#2a3942] bg-[#233138] shadow-xl">
+          {item(ShieldCheck, 'Güvenlik doğrulaması', onVerify)}
+          {blocked ? item(Ban, 'Engeli kaldır', onUnblock) : item(Ban, 'Engelle', onBlock, true)}
+          {item(Flag, 'Şikâyet et', onReport, true)}
+        </div>
+      )}
     </div>
   );
 }

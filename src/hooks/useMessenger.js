@@ -8,6 +8,10 @@ import {
   lookupByEmail,
   normalizeCode,
   subscribeMessages,
+  subscribeBlocks,
+  blockUser,
+  unblockUser,
+  createReport,
   uploadMessage,
   downloadMediaBytes,
   deleteMessageFromServer,
@@ -83,6 +87,9 @@ export default function useMessenger({ me, identity, myCode, preferences }) {
   const [activeEmail, setActiveEmail] = useState(null);
   const [messages, setMessages] = useState([]);
   const [syncError, setSyncError] = useState('');
+  const [blocked, setBlocked] = useState(() => new Set());
+  const blockedRef = useRef(blocked);
+  blockedRef.current = blocked;
 
   // Abonelik geri çağrılarında en güncel değerleri okumak için ref'ler
   const prefsRef = useRef(preferences);
@@ -201,6 +208,9 @@ export default function useMessenger({ me, identity, myCode, preferences }) {
     },
     [writeMeta]
   );
+
+  // ---------- Engellenenler ----------
+  useEffect(() => subscribeBlocks(myEmail, setBlocked), [myEmail]);
 
   // ---------- Kişiler (yalnızca bu cihazda) ve anahtar sabitleme ----------
   const ensureContact = useCallback(
@@ -325,6 +335,13 @@ export default function useMessenger({ me, identity, myCode, preferences }) {
         return;
       }
 
+      // Engellenen kişiden gelen (engellemeden önce gönderilmiş) mesajları gösterme
+      if (blockedRef.current.has(data.from)) {
+        processed.current.add(id);
+        await deleteMessageFromServer(id, data.media?.chunks || 0).catch(() => {});
+        return;
+      }
+
       const sender = data.from;
       await ensureContact(sender, data.fromCode);
       const base = {
@@ -436,7 +453,7 @@ export default function useMessenger({ me, identity, myCode, preferences }) {
     const onErr = (err) =>
       setSyncError(
         err?.code === 'permission-denied'
-          ? 'Sunucu erişimi reddedildi. İzin listesinden çıkarılmış olabilirsiniz.'
+          ? 'Sunucu erişimi reddedildi. Hesabınız askıya alınmış olabilir; sayfayı yenileyin.'
           : 'Sunucuyla bağlantı kurulamadı.'
       );
     const unsubIn = subscribeMessages('to', myEmail, (t, id, d) => enqueue(() => handleIncoming(t, id, d)), onErr);
@@ -486,6 +503,7 @@ export default function useMessenger({ me, identity, myCode, preferences }) {
   // ---------- Gönderim ----------
   const send = useCallback(
     async (to, content) => {
+      if (blockedRef.current.has(to)) throw new Error('Bu kişiyi engellediniz. Mesaj göndermek için engeli kaldırın.');
       let publishedKey = usersRef.current[to]?.publicKey;
       if (!publishedKey) publishedKey = (await fetchProfile(to))?.publicKey;
       const pinned = await pinIfNew(to, publishedKey);
@@ -551,7 +569,7 @@ export default function useMessenger({ me, identity, myCode, preferences }) {
         console.error('Mesaj gönderilemedi:', err);
         const reason =
           err?.code === 'permission-denied'
-            ? 'Sunucu reddetti (izin listesi veya anahtar uyuşmazlığı).'
+            ? 'Sunucu reddetti (kişi sizi engellemiş, hesabı askıda veya anahtar uyuşmazlığı olabilir).'
             : err?.message || 'Gönderilemedi.';
         await patchMessage(id, { status: 'failed', error: reason });
       }
@@ -720,6 +738,7 @@ export default function useMessenger({ me, identity, myCode, preferences }) {
             code: myContacts[email]?.code || null,
             publicKey: profile?.publicKey || null,
             keyStatus: contactKeyStatus(profile?.publicKey, trusted[email]),
+            blocked: blocked.has(email),
             unreadCount: meta.unread || 0,
             lastMessageText: meta.lastText || '',
             lastMessageType: meta.lastType || null,
@@ -727,7 +746,43 @@ export default function useMessenger({ me, identity, myCode, preferences }) {
           };
         })
         .sort((a, b) => b.lastMessageTs - a.lastMessageTs || a.name.localeCompare(b.name, 'tr')),
-    [myContacts, users, metas, trusted, myEmail]
+    [myContacts, users, metas, trusted, myEmail, blocked]
+  );
+
+  // ---------- Engelleme ve şikâyet ----------
+  const block = useCallback((email) => blockUser(myEmail, email), [myEmail]);
+  const unblock = useCallback((email) => unblockUser(myEmail, email), [myEmail]);
+
+  // Şikâyet: kullanıcı isterse karşı taraftan gelen son 10 mesaj (çözülmüş hâliyle) moderatörlere iletilir
+  const report = useCallback(
+    async (email, reason, details, includeEvidence) => {
+      let evidence = [];
+      if (includeEvidence) {
+        const convId = conversationIdFor(myEmail, email);
+        const stored = await getMessagesByConversation(convId);
+        const mem = [...memStore.current.values()].filter((m) => m.conversationId === convId);
+        const all = new Map();
+        [...stored, ...mem].forEach((m) => all.set(m.id, m));
+        evidence = [...all.values()]
+          .filter((m) => !m.isOutgoing)
+          .sort((a, b) => a.timestamp - b.timestamp)
+          .slice(-10)
+          .map((m) => ({
+            type: m.type,
+            text:
+              m.type === 'text'
+                ? String(m.text || '').slice(0, 1000)
+                : m.type === 'image'
+                  ? '[Fotoğraf]'
+                  : m.type === 'audio'
+                    ? '[Sesli mesaj]'
+                    : '[Çözülemeyen mesaj]',
+            at: m.timestamp,
+          }));
+      }
+      await createReport({ reporter: myEmail, reported: email, reason, details, evidence });
+    },
+    [myEmail]
   );
 
   const clearMemory = useCallback(() => {
@@ -754,6 +809,9 @@ export default function useMessenger({ me, identity, myCode, preferences }) {
     acceptNewKey,
     addContact,
     removeContact,
+    block,
+    unblock,
+    report,
     trusted,
     clearMemory,
   };

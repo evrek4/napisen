@@ -2,13 +2,13 @@ rules_version = '2';
 
 // napisen - Firestore Güvenlik Kuralları
 //
-// - İzin listesi: allowlist/{email} belgeleri. Her kullanıcı yalnızca KENDİ kaydını okuyabilir;
-//   listenin tamamını yalnızca yöneticiler görebilir. Kullanıcılar birbirlerini listeleyemez.
-// - Kişi bulma: Her kullanıcının tahmin edilmesi zor bir kodu vardır (codes/{kod}). Kodu bilen
-//   kişi bulunabilir. E-postayla bulunmak isteğe bağlıdır (users/{email}.discoverable).
-// - Uygulama sahibi (OWNER) her zaman izinli ve yöneticidir; ilk kurulumda konsolda belge
-//   oluşturmak gerekmez. Sahibi değiştirmek için aşağıdaki owner() fonksiyonunu düzenleyin.
-// - Mesaj içerikleri uçtan uca şifreli olduğundan sunucu yalnızca şifreli veriyi görür.
+// - Kayıt herkese açıktır: Google hesabıyla giriş yapan ve Kullanım Koşullarını kabul eden herkes üye olur.
+// - Roller: Sahip (owner) admindir. Admin, istediği kullanıcıya moderatör yetkisi verebilir (roles/{email}).
+//   Moderatörler şikâyetleri inceler ve hesapları askıya alabilir (bans/{email}).
+// - Kişi bulma: Kullanıcılar birbirini listeleyemez. Kişi kodunu (codes/{kod}) bilen kişi bulunabilir;
+//   e-postayla bulunmak isteğe bağlıdır (users/{email}.discoverable).
+// - Engelleme: blocks/{engelleyen}/list/{engellenen}. Engellenen kişi mesaj gönderemez.
+// - Mesaj içerikleri uçtan uca şifreli olduğundan sunucu (ve moderatörler) yalnızca şifreli veriyi görür.
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -26,21 +26,37 @@ service cloud.firestore {
       return request.auth.token.email.lower();
     }
 
-    function entry(email) {
-      return /databases/$(database)/documents/allowlist/$(email);
+    function banned(email) {
+      return exists(/databases/$(database)/documents/bans/$(email));
     }
 
-    function allowedEmail(email) {
-      return email is string && (email == owner() || exists(entry(email)));
-    }
-
+    // Giriş yapmış ve askıya alınmamış kullanıcı
     function allowed() {
-      return signedIn() && allowedEmail(me());
+      return signedIn() && !banned(me());
     }
 
     function isAdmin() {
-      return signedIn()
-        && (me() == owner() || (exists(entry(me())) && get(entry(me())).data.admin == true));
+      return allowed() && me() == owner();
+    }
+
+    function isModerator(email) {
+      return exists(/databases/$(database)/documents/roles/$(email))
+        && get(/databases/$(database)/documents/roles/$(email)).data.role == 'moderator';
+    }
+
+    function isMod() {
+      return allowed() && (me() == owner() || isModerator(me()));
+    }
+
+    // Mesaj alabilecek kullanıcı: kayıtlı ve askıda değil
+    function reachable(email) {
+      return email is string
+        && exists(/databases/$(database)/documents/users/$(email))
+        && !banned(email);
+    }
+
+    function blockedBy(blocker, email) {
+      return exists(/databases/$(database)/documents/blocks/$(blocker)/list/$(email));
     }
 
     function participant(d) {
@@ -63,24 +79,78 @@ service cloud.firestore {
         && d.updatedAt == request.time;
     }
 
-    // ---------- İzin listesi ----------
-    match /allowlist/{email} {
-      // Kendi kaydını herkes okuyabilir (erişim kontrolü için); diğerlerini yalnızca yöneticiler
-      allow get: if allowed() && (email == me() || isAdmin());
+    // ---------- Roller (yalnızca admin yönetir) ----------
+    match /roles/{email} {
+      allow get: if signedIn() && (email == me() || isAdmin());
       allow list: if isAdmin();
       allow create, update: if isAdmin()
+        && email != owner()
         && email == email.lower()
-        && email.matches('^[^@\\s]+@[^@\\s]+[.][^@\\s]+$')
-        && request.resource.data.keys().hasOnly(['admin', 'addedBy', 'addedAt'])
-        && request.resource.data.admin is bool
-        && request.resource.data.addedBy == me()
-        && request.resource.data.addedAt == request.time
-        // Yönetici kendi yetkisini kaldıramaz
-        && (email != me() || request.resource.data.admin == true);
-      allow delete: if isAdmin() && email != me() && email != owner();
+        && request.resource.data.keys().hasOnly(['role', 'grantedBy', 'grantedAt'])
+        && request.resource.data.role == 'moderator'
+        && request.resource.data.grantedBy == me()
+        && request.resource.data.grantedAt == request.time;
+      allow delete: if isAdmin();
     }
 
-    // ---------- Kişi kodları (herkese açık profil, yalnızca kodu bilen okur) ----------
+    // ---------- Askıya alınan hesaplar (moderatörler yönetir) ----------
+    match /bans/{email} {
+      // Kullanıcı kendi askı kaydını görebilir (neden giremediğini öğrenmek için)
+      allow get: if signedIn() && (email == me() || isMod());
+      allow list: if isMod();
+      allow create: if isMod()
+        && email != owner()
+        && email != me()
+        && email == email.lower()
+        // Moderatörü yalnızca admin askıya alabilir
+        && (isAdmin() || !isModerator(email))
+        && request.resource.data.keys().hasOnly(['reason', 'by', 'at'])
+        && request.resource.data.reason is string
+        && request.resource.data.reason.size() <= 500
+        && request.resource.data.by == me()
+        && request.resource.data.at == request.time;
+      allow delete: if isMod();
+      allow update: if false;
+    }
+
+    // ---------- Engelleme ----------
+    match /blocks/{blocker}/list/{blocked} {
+      allow get, list: if signedIn() && blocker == me();
+      allow create: if allowed()
+        && blocker == me()
+        && blocked != me()
+        && request.resource.data.keys().hasOnly(['at'])
+        && request.resource.data.at == request.time;
+      allow delete: if signedIn() && blocker == me();
+      allow update: if false;
+    }
+
+    // ---------- Şikâyetler ----------
+    match /reports/{id} {
+      allow create: if allowed()
+        && request.resource.data.keys().hasOnly(
+             ['reporter', 'reported', 'reason', 'details', 'evidence', 'createdAt', 'status'])
+        && request.resource.data.reporter == me()
+        && request.resource.data.reported is string
+        && request.resource.data.reported != me()
+        && request.resource.data.reason in ['spam', 'harassment', 'illegal', 'impersonation', 'other']
+        && request.resource.data.details is string
+        && request.resource.data.details.size() <= 1000
+        && request.resource.data.evidence is list
+        && request.resource.data.evidence.size() <= 20
+        && request.resource.data.status == 'open'
+        && request.resource.data.createdAt == request.time;
+      allow get, list: if isMod();
+      allow update: if isMod()
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['status', 'resolvedBy', 'resolvedAt', 'resolution'])
+        && request.resource.data.status in ['open', 'resolved', 'dismissed']
+        && request.resource.data.resolvedBy == me()
+        && request.resource.data.resolvedAt == request.time;
+      allow delete: if isAdmin();
+    }
+
+    // ---------- Kişi kodları (açık profil, yalnızca kodu bilen okur) ----------
     match /codes/{code} {
       allow get: if allowed();
       allow list: if false;
@@ -94,27 +164,32 @@ service cloud.firestore {
         && request.resource.data.keys().hasOnly(['email', 'displayName', 'publicKey', 'updatedAt'])
         && request.resource.data.email == me()
         && validPublicProfile(request.resource.data);
-      allow delete: if allowed() && resource.data.email == me();
+      // Hesap silme sırasında askıdaki kullanıcı da kendi verisini silebilir
+      allow delete: if signedIn() && resource.data.email == me();
     }
 
     // ---------- Kullanıcı profilleri ----------
     // Yalnızca sahibi okuyabilir; sahibi "e-postayla bulunabilirim" dediyse diğerleri de okuyabilir.
-    // Listeleme kapalı.
     match /users/{email} {
-      allow get: if allowed() && (email == me() || resource.data.discoverable == true);
+      allow get: if (signedIn() && email == me()) || (allowed() && resource.data.discoverable == true);
       allow list: if false;
       allow create, update: if allowed()
         && email == me()
         && request.resource.data.keys().hasOnly(
-             ['email', 'displayName', 'publicKey', 'code', 'discoverable', 'updatedAt'])
+             ['email', 'displayName', 'publicKey', 'code', 'discoverable', 'termsVersion', 'termsAcceptedAt',
+              'updatedAt'])
         && request.resource.data.email == me()
         && validPublicProfile(request.resource.data)
         && request.resource.data.discoverable is bool
+        // Kullanım Koşulları kabul edilmiş olmalı
+        && request.resource.data.termsVersion is string
+        && request.resource.data.termsAcceptedAt is timestamp
         // Kod gerçekten bu kullanıcıya ait olmalı
         && validCode(request.resource.data.code)
         && exists(/databases/$(database)/documents/codes/$(request.resource.data.code))
         && get(/databases/$(database)/documents/codes/$(request.resource.data.code)).data.email == me();
-      allow delete: if false;
+      // Hesap silme
+      allow delete: if signedIn() && email == me();
     }
 
     // ---------- Mesajlar ----------
@@ -129,7 +204,9 @@ service cloud.firestore {
         && request.resource.data.from == me()
         && request.resource.data.to is string
         && request.resource.data.to != me()
-        && allowedEmail(request.resource.data.to)
+        && reachable(request.resource.data.to)
+        // Alıcı göndereni engellediyse mesaj gönderilemez
+        && !blockedBy(request.resource.data.to, me())
         // Gönderen, yayınladığı kendi açık anahtarını ve kodunu kullanmak zorunda
         && request.resource.data.fromPub == myProfile().publicKey
         && request.resource.data.fromCode == myProfile().code
@@ -154,8 +231,8 @@ service cloud.firestore {
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status'])
         && request.resource.data.status == 'delivered';
 
-      // Alıcı teslim aldıktan sonra, gönderen ise geri çekmek için silebilir
-      allow delete: if allowed() && participant(resource.data);
+      // Alıcı teslim aldıktan sonra, gönderen ise geri çekmek için silebilir (hesap silmede de)
+      allow delete: if signedIn() && participant(resource.data);
 
       // Şifreli medya parçaları
       match /chunks/{n} {
@@ -163,17 +240,18 @@ service cloud.firestore {
         allow create: if allowed()
           && request.resource.data.keys().hasOnly(['from', 'to', 'data'])
           && request.resource.data.from == me()
-          && allowedEmail(request.resource.data.to)
+          && reachable(request.resource.data.to)
+          && !blockedBy(request.resource.data.to, me())
           && request.resource.data.data is bytes
           && request.resource.data.data.size() <= 600000;
-        allow delete: if allowed() && participant(resource.data);
+        allow delete: if signedIn() && participant(resource.data);
         allow list, update: if false;
       }
     }
 
     // ---------- Cihaz taşıma (şifreli, tek kullanımlık) ----------
     match /transfers/{email} {
-      allow get, delete: if allowed() && email == me();
+      allow get, delete: if signedIn() && email == me();
       allow create, update: if allowed()
         && email == me()
         && request.resource.data.keys().hasOnly(['oldPub', 'iv', 'ct', 'createdAt'])
@@ -182,8 +260,11 @@ service cloud.firestore {
         && request.resource.data.createdAt == request.time;
     }
 
-    // Eski sürümden kalan config/* belgeleri artık kullanılmaz
+    // Eski sürümlerden kalan koleksiyonlar artık kullanılmaz
     match /config/{doc} {
+      allow read, write: if false;
+    }
+    match /allowlist/{doc} {
       allow read, write: if false;
     }
   }

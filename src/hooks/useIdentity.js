@@ -49,18 +49,26 @@ export default function useIdentity(me) {
   const publish = useCallback(
     async (publicKey, overrides = {}) => {
       const current = overrides.profile || {};
+      // Bu ekrana yalnızca güncel koşullar onaylandıktan sonra gelinir
+      const termsVersion = me.terms.version;
+      const termsAcceptedAt =
+        current.termsVersion === termsVersion && current.termsAcceptedAt ? current.termsAcceptedAt : 'now';
       const code = await publishProfile({
         email: me.email,
         displayName: me.displayName,
         publicKey,
         code: 'code' in overrides ? overrides.code : current.code,
         discoverable: overrides.discoverable ?? current.discoverable ?? false,
+        termsVersion,
+        termsAcceptedAt,
       });
       return {
         code,
         discoverable: overrides.discoverable ?? current.discoverable ?? false,
         publicKey,
         displayName: (me.displayName || '').slice(0, 80),
+        termsVersion,
+        termsAcceptedAt: termsAcceptedAt === 'now' ? null : termsAcceptedAt,
       };
     },
     [me]
@@ -86,7 +94,12 @@ export default function useIdentity(me) {
       }
       let current = profile;
       // İlk yayın, eski sürümden kalan kodsuz profil veya değişen görünen ad
-      if (!profile || !profile.code || profile.displayName !== (me.displayName || '').slice(0, 80)) {
+      if (
+        !profile ||
+        !profile.code ||
+        profile.termsVersion !== me.terms.version ||
+        profile.displayName !== (me.displayName || '').slice(0, 80)
+      ) {
         current = await publish(local.publicKey, { profile: profile || {} });
       }
       setState({ status: 'ready', identity: local, publishedKey: local.publicKey, profile: current, error: '' });
@@ -182,7 +195,10 @@ export default function useIdentity(me) {
           }
           await deleteTransfer(me.email);
           unsub();
-          const profile = await fetchMyProfile(me.email).catch(() => null);
+          let profile = await fetchMyProfile(me.email).catch(() => null);
+          if (profile?.publicKey === identity.publicKey && profile.termsVersion !== me.terms.version) {
+            profile = await publish(identity.publicKey, { profile });
+          }
           setState({ status: 'ready', identity, publishedKey: identity.publicKey, profile, error: '' });
           onDone?.();
         } catch (err) {
@@ -192,7 +208,7 @@ export default function useIdentity(me) {
       });
       return unsub;
     },
-    [me]
+    [me, publish]
   );
 
   // ESKİ CİHAZ: yeni cihazın QR kodunu okut ve kimliği ona şifreli gönder

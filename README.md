@@ -1,6 +1,6 @@
 # napisen 🔒
 
-> Uçtan uca şifreli, yalnızca davetlilere açık, Android ve web'de çalışan mesajlaşma uygulaması.
+> Uçtan uca şifreli, Android ve web'de çalışan mesajlaşma uygulaması.
 
 ---
 
@@ -9,7 +9,9 @@
 | Katman | Nasıl çalışır |
 |---|---|
 | **Giriş** | Google hesabı ile (Firebase Authentication). Google hesabınızda iki adımlı doğrulama açıksa o da devrededir. |
-| **İzin listesi** | Sunucuda (`allowlist/{email}` belgeleri) tutulur ve `firestore.rules` ile zorunlu kılınır. Listede olmayan bir hesap, giriş yapsa bile hiçbir veriye erişemez. Listeyi **yalnızca yöneticiler** görür. |
+| **Üyelik** | Herkes Google hesabıyla üye olabilir. Kayıtta Kullanım Koşulları, Gizlilik Politikası/KVKK Aydınlatma Metni ve yaş (13+) onayı zorunludur; onay tarihi ve sürümü sunucuda saklanır. |
+| **Roller** | `achartave@gmail.com` admindir (`firestore.rules` → `owner()`). Admin, **Ayarlar → Yetkiler** bölümünden istediği kişiye moderatör yetkisi verir. Moderatörler şikâyetleri inceler ve hesapları askıya alabilir; mesaj içeriklerini göremezler. |
+| **Engelleme ve şikâyet** | Sohbet menüsünden kişi engellenir (sunucu engellenen kişinin mesajını reddeder) veya şikâyet edilir. Şikâyet eden isterse karşı taraftan gelen son 10 mesajı delil olarak ekler. |
 | **Kişi bulma** | Kullanıcılar birbirini listeleyemez. Herkesin 8 karakterlik bir **kişi kodu** vardır (ör. `7K3Q-9XW2`); kodu bilen kişi size yazabilir. Kod istendiğinde yenilenebilir. **E-postayla bulunmak isteğe bağlıdır** (varsayılan: kapalı); kapalıyken bir adresin kayıtlı olup olmadığı bile anlaşılamaz. |
 | **Şifreleme** | Her cihaz kendi **ECDH P-256** anahtar çiftini üretir. Sohbet anahtarı `ECDH → HKDF-SHA256 → AES-GCM-256` ile türetilir. Özel anahtar cihazdan çıkmaz. Sunucu yalnızca şifreli veriyi görür. |
 | **Kişi doğrulama (isteğe bağlı)** | Karşı tarafın anahtarı ilk görüşte kaydedilir. Ekstra güvenlik için **yüz yüze QR okutarak** veya 60 haneli güvenlik numarasını karşılaştırarak doğrulayabilirsiniz. Anahtar sonradan değişirse gönderim durur; siz onaylayana kadar mesaj gitmez. |
@@ -19,6 +21,12 @@
 * **E-posta adresimle bulunabilirim** (varsayılan: kapalı): Açıkken e-postanızı bilen izinli kullanıcılar da sizi bulabilir.
 * **Sunucuda Sakla** (varsayılan: kapalı): Kapalıyken mesaj teslim edildiği an sunucudan silinir. Açıkken şifreli kopya sunucuda kalır; yeni cihaza taşındığınızda geçmiş geri yüklenir.
 * **Hayalet Mod** (varsayılan: kapalı): Açıkken mesajlar cihaz hafızasına yazılmaz, sayfa kapanınca kaybolur.
+
+### Yasal metinler
+* `/kullanim-kosullari` ve `/gizlilik` adreslerinden giriş yapmadan erişilebilir (Google Play için gizlilik politikası URL'si: `https://napisen-a7f4a.web.app/gizlilik`).
+* Metinler `src/legal/texts.js`, veri sorumlusu bilgileri `src/config/app.js` içindedir. **Yayından önce veri sorumlusunun gerçek ad/unvan ve adresini girin ve metinleri bir hukukçuya kontrol ettirin.**
+* Metinleri değiştirdiğinizde `TERMS_VERSION` değerini güncelleyin; kullanıcılardan yeniden onay istenir.
+* Kullanıcılar hesaplarını **Ayarlar → Hesap → Hesabımı sil** ile silebilir (KVKK ve Google Play gereği).
 
 ### Bilinen sınırlar
 * Bir hesap aynı anda tek bir anahtarla çalışır. Yeni cihaza **taşıma** yapılırsa iki cihaz da aynı anahtarı kullanır; "Sunucuda Sakla" kapalıyken bir mesaj yalnızca onu ilk alan cihazda görünür.
@@ -50,10 +58,8 @@ npx firebase login
 npm run deploy:rules
 ```
 
-### 4. Uygulama sahibi ve izin listesi
-Konsolda belge oluşturmanız **gerekmez**. `firestore.rules` dosyasındaki `owner()` fonksiyonunda yazan adres (şu an `achartave@gmail.com`) her zaman izinli ve yöneticidir. Sahibi değiştirmek için bu adresi düzenleyip kuralları yeniden yükleyin.
-
-Diğer kişileri sahip hesabıyla giriş yaptıktan sonra **Ayarlar → İzin Listesi** bölümünden ekleyin.
+### 4. Admin
+Konsolda belge oluşturmanız **gerekmez**. Admin adresi iki yerde tanımlıdır ve aynı olmalıdır: `firestore.rules` → `owner()` ve `src/config/app.js` → `OWNER_EMAIL` (şu an `achartave@gmail.com`).
 
 ### 5. Yayınlama
 ```bash
@@ -68,7 +74,7 @@ Firebase Hosting kullanmak istemezseniz `npm run build` ile oluşan `dist/` klas
 
 ## Kullanım
 
-1. **İlk giriş:** Google ile giriş yapın. Uygulama bu cihaz için şifreleme anahtarınızı ve kişi kodunuzu otomatik oluşturur. Kodunuz sol üstte, adınızın altında görünür (dokununca kopyalanır).
+1. **Üyelik:** Google ile giriş yapın ve koşulları onaylayın. Uygulama bu cihaz için şifreleme anahtarınızı ve kişi kodunuzu otomatik oluşturur. Kodunuz sol üstte, adınızın altında görünür (dokununca kopyalanır).
 2. **Sohbet başlatma:** Sol üstteki **Yeni sohbet** simgesine dokunun ve karşı tarafın kişi kodunu girin. Karşı taraf e-postayla bulunmayı açtıysa e-posta adresini de yazabilirsiniz. Size ilk mesajı atan kişi listenize otomatik eklenir.
 3. **İsteğe bağlı doğrulama:** Sohbet başlığındaki *Şifreli · doğrula* yazısına dokunun.
    * Bir kişi **Kodum** sekmesindeki QR'ı gösterir, diğeri **Kodu okut** sekmesinden okutur. Sonra roller değişir.
@@ -84,14 +90,11 @@ Firebase Hosting kullanmak istemezseniz `npm run build` ile oluşan `dist/` klas
 ```bash
 npm run dev:emulators
 ```
-Başka bir terminalde izin listesine kişi ekleyin (`firestore.rules` içindeki sahip adresi her zaman izinlidir):
-```bash
-npm run seed:emulator -- arkadas1@gmail.com arkadas2@gmail.com
-```
+Başka bir terminalde:
 ```bash
 npm run dev:local
 ```
-`http://localhost:3000` açılır. Google giriş penceresinde emülatörün sahte hesap ekranı çıkar; izin listesindeki bir adresi yazarak giriş yapın. İki kullanıcıyı denemek için ikinci bir gizli pencere açın. Emülatör arayüzü: `http://localhost:4000`.
+`http://localhost:3000` açılır. Google giriş penceresinde emülatörün sahte hesap ekranı çıkar; herhangi bir adresle giriş yapın (admin olarak denemek için `achartave@gmail.com`). İki kullanıcıyı denemek için ikinci bir gizli pencere açın. Emülatör arayüzü: `http://localhost:4000`.
 
 ### Testler
 ```bash

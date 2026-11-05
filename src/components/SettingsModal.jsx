@@ -15,22 +15,25 @@ import {
   Bell,
   Smartphone,
   KeyRound,
-  Crown,
+  FileText,
+  UserX,
   AtSign,
   RefreshCw,
 } from 'lucide-react';
 import QrScanner from './QrScanner';
 import MyCodeCard from './MyCodeCard';
-import { getStorageStats, clearMessageHistory } from '../services/db';
-import { addAllowedEmail, removeAllowedEmail, subscribeAllowlist } from '../services/firebase';
-import { publicKeyFingerprint, normalizeEmail } from '../services/crypto';
+import { getStorageStats, clearMessageHistory, wipeDevice } from '../services/db';
+import { deleteAccount } from '../services/firebase';
+import ModerationPanel from './ModerationPanel';
+import RolesPanel from './RolesPanel';
+import LegalLinks from './LegalLinks';
+import { publicKeyFingerprint } from '../services/crypto';
 import {
   notificationPermission,
   notificationsSupported,
   requestNotificationPermission,
 } from '../services/notify';
 
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function Toggle({ on, onClick, label }) {
   return (
@@ -60,7 +63,7 @@ export default function SettingsModal({
   discoverable,
   onSetDiscoverable,
   onRegenerateCode,
-  isAdmin,
+  role,
   contacts,
   preferences,
   onTogglePreference,
@@ -71,8 +74,9 @@ export default function SettingsModal({
   onLogout,
 }) {
   const [activeTab, setActiveTab] = useState('privacy');
-  const [newEmail, setNewEmail] = useState('');
-  const [listMsg, setListMsg] = useState('');
+  const [deleting, setDeleting] = useState(false);
+  const [deleteMsg, setDeleteMsg] = useState('');
+  const isMod = role === 'admin' || role === 'moderator';
   const [storageStats, setStorageStats] = useState({ usageMB: '0.00', quotaMB: 'N/A' });
   const [fingerprint, setFingerprint] = useState('');
   const [notifPerm, setNotifPerm] = useState(notificationPermission());
@@ -80,7 +84,6 @@ export default function SettingsModal({
   const [transferMsg, setTransferMsg] = useState({ type: '', text: '' });
   const [transferBusy, setTransferBusy] = useState(false);
 
-  const [allowlist, setAllowlist] = useState([]);
   const [profileMsg, setProfileMsg] = useState('');
   const [profileBusy, setProfileBusy] = useState(false);
 
@@ -98,13 +101,6 @@ export default function SettingsModal({
     }
   };
 
-  // Tüm liste yalnızca yöneticiye gösterilir (sunucu kuralı da bunu zorunlu kılar)
-  useEffect(() => {
-    if (!isAdmin) return undefined;
-    return subscribeAllowlist(setAllowlist, (err) =>
-      setListMsg(err?.code === 'permission-denied' ? 'Listeyi görme yetkiniz yok.' : 'Liste yüklenemedi.')
-    );
-  }, [isAdmin]);
 
   useEffect(() => {
     getStorageStats().then(setStorageStats);
@@ -117,34 +113,24 @@ export default function SettingsModal({
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  const handleAddEmail = async (e) => {
-    e.preventDefault();
-    const clean = normalizeEmail(newEmail);
-    if (!EMAIL_RE.test(clean)) {
-      setListMsg('Geçerli bir e-posta adresi yazın.');
-      return;
-    }
-    if (allowlist.some((e) => e.email === clean)) {
-      setListMsg('Bu e-posta zaten listede.');
-      return;
-    }
+  const handleDeleteAccount = async () => {
+    const typed = window.prompt('Hesabınız kalıcı olarak silinecek. Onaylamak için SİL yazın:');
+    if ((typed || '').trim().toLocaleUpperCase('tr-TR') !== 'SİL') return;
+    setDeleting(true);
+    setDeleteMsg('');
     try {
-      await addAllowedEmail(clean, me.email);
-      setNewEmail('');
-      setListMsg(`✓ ${clean} eklendi. Artık Google hesabıyla giriş yapabilir.`);
+      await deleteAccount(me.email, myCode);
+      await wipeDevice();
+      try {
+        localStorage.clear();
+      } catch {
+        /* yok say */
+      }
+      window.location.replace('/');
     } catch (err) {
-      setListMsg('Eklenemedi: ' + (err.code === 'permission-denied' ? 'yetkiniz yok.' : err.message));
-    }
-  };
-
-  const handleRemoveEmail = async (email) => {
-    if (email === me.email) return;
-    if (!window.confirm(`${email} izin listesinden çıkarılsın mı? Bu kişi artık uygulamaya giremez.`)) return;
-    try {
-      await removeAllowedEmail(email);
-      setListMsg(`${email} çıkarıldı.`);
-    } catch (err) {
-      setListMsg('Çıkarılamadı: ' + (err.code === 'permission-denied' ? 'yetkiniz yok.' : err.message));
+      console.error('Hesap silinemedi:', err);
+      setDeleteMsg('Hesap silinemedi: ' + (err.message || err) + '. Tekrar deneyin.');
+      setDeleting(false);
     }
   };
 
@@ -175,8 +161,10 @@ export default function SettingsModal({
   const tabs = [
     ['privacy', 'Gizlilik'],
     ['security', 'Güvenlik'],
-    ...(isAdmin ? [['allowlist', 'İzin Listesi']] : []),
     ['storage', 'Hafıza'],
+    ['account', 'Hesap'],
+    ...(isMod ? [['moderation', 'Moderasyon']] : []),
+    ...(role === 'admin' ? [['roles', 'Yetkiler']] : []),
   ];
 
   return (
@@ -399,54 +387,49 @@ export default function SettingsModal({
           )}
 
           {/* ---------- İZİN LİSTESİ ---------- */}
-          {activeTab === 'allowlist' && isAdmin && (
+          {activeTab === 'moderation' && isMod && <ModerationPanel me={me} />}
+
+          {activeTab === 'roles' && role === 'admin' && <RolesPanel me={me} />}
+
+          {/* ---------- HESAP ---------- */}
+          {activeTab === 'account' && (
             <>
-              <p className="text-xs leading-relaxed text-[#8696a0]">
-                Yalnızca bu listedeki Google hesapları uygulamaya girebilir. Liste yalnızca yöneticilere görünür;
-                diğer kullanıcılar kimin kayıtlı olduğunu göremez ve yalnızca e-postasını bildikleri kişiye yazabilir.
-              </p>
+              <div className="rounded-xl bg-[#182229] p-4 border border-[#2a3942] space-y-1 text-xs">
+                <p className="text-[#8696a0]">Giriş yapılan hesap</p>
+                <p className="text-sm text-[#e9edef]">{me.displayName || me.email}</p>
+                <p className="text-[#8696a0]">{me.email}</p>
+                <p className="pt-1 text-[#8696a0]">
+                  Rol: {role === 'admin' ? 'Admin' : role === 'moderator' ? 'Moderatör' : 'Kullanıcı'}
+                </p>
+              </div>
 
-              {(
-                <form onSubmit={handleAddEmail} className="flex gap-2">
-                  <input
-                    type="email"
-                    value={newEmail}
-                    onChange={(e) => setNewEmail(e.target.value)}
-                    placeholder="yeni.kisi@gmail.com"
-                    className="flex-1 min-w-0 rounded-lg bg-[#202c33] px-3 py-2 text-sm placeholder-[#8696a0] focus:outline-none focus:ring-1 focus:ring-[#00a884]"
-                  />
-                  <button type="submit" className="flex items-center gap-1 rounded-lg bg-[#00a884] px-3 py-2 text-xs font-semibold text-[#111b21] cursor-pointer">
-                    <UserPlus className="h-4 w-4" /> Ekle
-                  </button>
-                </form>
-              )}
-              {listMsg && <p className="text-xs text-[#00a884]">{listMsg}</p>}
+              <div className="rounded-xl bg-[#182229] p-4 border border-[#2a3942] space-y-2">
+                <h4 className="flex items-center gap-2 text-sm font-semibold">
+                  <FileText className="h-4 w-4 text-[#8696a0]" /> Yasal metinler
+                </h4>
+                <LegalLinks />
+              </div>
 
-              <div className="divide-y divide-[#222d34] rounded-xl border border-[#2a3942] bg-[#182229]">
-                {allowlist.length === 0 && <p className="p-3 text-xs text-[#8696a0]">Yükleniyor...</p>}
-                {allowlist.map(({ email, admin }) => (
-                  <div key={email} className="flex items-center justify-between px-3 py-2.5 text-xs">
-                    <span className="flex items-center gap-1.5 truncate">
-                      {email}
-                      {admin && <Crown className="h-3 w-3 text-amber-400" aria-label="Yönetici" />}
-                      {email === me.email && <span className="text-[#8696a0]">(siz)</span>}
-                    </span>
-                    {email !== me.email && (
-                      <button
-                        onClick={() => handleRemoveEmail(email)}
-                        className="rounded p-1 text-[#8696a0] hover:bg-red-500/20 hover:text-red-300 cursor-pointer"
-                        aria-label="İzni kaldır"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
-                    )}
-                  </div>
-                ))}
+              <div className="rounded-xl bg-red-950/30 p-4 border border-red-900/50 space-y-2">
+                <h4 className="flex items-center gap-2 text-sm font-semibold text-red-200">
+                  <UserX className="h-4 w-4" /> Hesabımı sil
+                </h4>
+                <p className="text-xs leading-relaxed text-red-100/80">
+                  Profiliniz, kişi kodunuz ve sunucuda bekleyen mesajlarınız kalıcı olarak silinir; bu cihazdaki
+                  geçmiş ve anahtarlar da temizlenir. Bu işlem geri alınamaz.
+                </p>
+                {deleteMsg && <p className="text-xs text-red-200">{deleteMsg}</p>}
+                <button
+                  disabled={deleting}
+                  onClick={handleDeleteAccount}
+                  className="w-full rounded-lg bg-red-600 py-2.5 text-xs font-semibold text-white disabled:opacity-50 cursor-pointer"
+                >
+                  {deleting ? 'Siliniyor...' : 'Hesabımı kalıcı olarak sil'}
+                </button>
               </div>
             </>
           )}
 
-          {/* ---------- HAFIZA ---------- */}
           {activeTab === 'storage' && (
             <>
               <div className="grid grid-cols-2 gap-3">

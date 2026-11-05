@@ -101,7 +101,7 @@ export default function MessengerApp({ me, role, identityState, onLogout }) {
           onSendAudio={guard((blob, duration) => messenger.sendAudio(activeContact.email, blob, duration))}
           onSendImage={guard((blob) => messenger.sendImage(activeContact.email, blob))}
           onRetry={guard(messenger.retry)}
-          onImageClick={(url, mimeType) => setLightbox({ url, mimeType })}
+          onImageClick={(blob, mimeType) => setLightbox({ blob, mimeType })}
           onError={setToast}
         />
       </div>
@@ -171,7 +171,7 @@ export default function MessengerApp({ me, role, identityState, onLogout }) {
         />
       )}
 
-      {lightbox && <ImageLightbox imageUrl={lightbox.url} mimeType={lightbox.mimeType} onClose={() => setLightbox(null)} />}
+      {lightbox && <ImageLightbox blob={lightbox.blob} mimeType={lightbox.mimeType} onClose={() => setLightbox(null)} />}
 
       {toast && (
         <div className="fixed bottom-20 left-1/2 z-[60] -translate-x-1/2 max-w-[90vw] rounded-xl bg-red-900/95 px-4 py-2.5 text-xs text-red-50 shadow-xl border border-red-700">

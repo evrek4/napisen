@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Play, Pause, Check, CheckCheck, Lock, Mic, FileWarning, Clock, AlertCircle, RotateCw, ShieldQuestion } from 'lucide-react';
 
-export default function MessageBubble({ message, onImageClick, onRetry }) {
+export default function MessageBubble({ message, onImageClick, onRetry, onMediaLoad }) {
   const isOutgoing = message.isOutgoing;
   const [audioUrl, setAudioUrl] = useState(null);
   const [imageUrl, setImageUrl] = useState(null);
@@ -121,9 +121,10 @@ export default function MessageBubble({ message, onImageClick, onRetry }) {
           <div className="mb-1 overflow-hidden rounded-xl">
             {imageUrl ? (
               <img
+                onLoad={onMediaLoad}
                 src={imageUrl}
                 alt="Şifreli Görsel"
-                onClick={() => onImageClick && onImageClick(imageUrl, message.mimeType)}
+                onClick={() => onImageClick && onImageClick(message.mediaBlob, message.mimeType)}
                 className="max-h-72 w-full object-cover rounded-xl cursor-pointer hover:opacity-95 transition"
               />
             ) : (
@@ -170,7 +171,12 @@ export default function MessageBubble({ message, onImageClick, onRetry }) {
               ) : message.status === 'failed' ? (
                 <AlertCircle className="h-3.5 w-3.5 text-red-400" aria-label="Gönderilemedi" />
               ) : (
-                <Clock className="h-3 w-3 text-[#8696a0]" aria-label="Gönderiliyor" />
+                <span className="flex items-center gap-0.5">
+                  {typeof message.progress === 'number' && (
+                    <span className="font-mono text-[10px] text-[#8696a0]">%{message.progress}</span>
+                  )}
+                  <Clock className="h-3 w-3 text-[#8696a0]" aria-label="Gönderiliyor" />
+                </span>
               )}
             </span>
           )}

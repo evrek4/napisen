@@ -39,9 +39,24 @@ export default function ChatArea({
 }) {
   const messagesEndRef = useRef(null);
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  const scrollRef = useRef(null);
+  const nearBottomRef = useRef(true);
+
+  const scrollToBottom = (smooth = true) => {
+    messagesEndRef.current?.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto', block: 'end' });
   };
+
+  // Kullanıcı en alttaysa: görsel yüklenince veya klavye açılıp ekran daralınca en altta kal
+  const keepAtBottom = () => {
+    if (nearBottomRef.current) scrollToBottom(false);
+  };
+
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return undefined;
+    vv.addEventListener('resize', keepAtBottom);
+    return () => vv.removeEventListener('resize', keepAtBottom);
+  }, []);
 
   useEffect(() => {
     scrollToBottom();
@@ -175,6 +190,11 @@ export default function ChatArea({
 
       {/* MESAJ AKIŞI ALANI */}
       <div
+        ref={scrollRef}
+        onScroll={(e) => {
+          const el = e.currentTarget;
+          nearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+        }}
         className="flex-1 overflow-y-auto p-2 md:p-4 space-y-2"
         style={{
           backgroundImage: `radial-gradient(circle at center, #111b21 0%, #0b141a 100%)`,
@@ -256,7 +276,13 @@ export default function ChatArea({
 
         {/* MESAJ LİSTESİ */}
         {messages.map((msg) => (
-          <MessageBubble key={msg.id} message={msg} onImageClick={onImageClick} onRetry={onRetry} />
+          <MessageBubble
+            key={msg.id}
+            message={msg}
+            onImageClick={onImageClick}
+            onRetry={onRetry}
+            onMediaLoad={keepAtBottom}
+          />
         ))}
 
         <div ref={messagesEndRef} />

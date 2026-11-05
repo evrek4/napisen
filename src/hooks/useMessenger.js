@@ -377,6 +377,11 @@ export default function useMessenger({ me, identity, myCode, preferences }) {
           keyMismatch: Boolean(pinned && pinned.publicKey !== data.fromPub),
         };
       } catch (err) {
+        if (err?.code === 'media-missing') {
+          // Aynı hesabın başka bir cihazı mesajı teslim alıp sunucudan sildi: bu cihazda gösterme
+          processed.current.add(id);
+          return;
+        }
         console.error('Gelen mesaj çözülemedi:', err);
         msg = { ...base, type: 'undecryptable', text: err.message || 'Mesaj çözülemedi.' };
       }
@@ -562,8 +567,16 @@ export default function useMessenger({ me, identity, myCode, preferences }) {
             header,
             media,
           },
+          mediaBytes,
+          // Yükleme yüzdesi yalnızca ekranda gösterilir (yerel veritabanına yazılmaz)
           mediaBytes
+            ? (fraction) =>
+                setMessages((prev) =>
+                  prev.map((m) => (m.id === id ? { ...m, progress: Math.round(fraction * 100) } : m))
+                )
+            : undefined
         );
+        setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, progress: null } : m)));
         await patchMessage(id, { status: 'sent', error: null }, (m) => m.status === 'sending');
       } catch (err) {
         console.error('Mesaj gönderilemedi:', err);

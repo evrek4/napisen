@@ -1,10 +1,19 @@
 // napisen - Tam Ekran Görsel İnceleyici (Lightbox)
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { X, Download, Shield } from 'lucide-react';
 
 const EXT = { 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp', 'image/svg+xml': 'svg' };
 
-export default function ImageLightbox({ imageUrl, mimeType, onClose }) {
+// Görselin kendi Blob URL'sini üretir: sohbet güncellense veya kapansa bile görüntü bozulmaz
+export default function ImageLightbox({ blob, mimeType, onClose }) {
+  const [imageUrl, setImageUrl] = useState(null);
+  useEffect(() => {
+    if (!blob) return undefined;
+    const url = URL.createObjectURL(blob);
+    setImageUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [blob]);
+
   useEffect(() => {
     const onKey = (e) => e.key === 'Escape' && onClose();
     window.addEventListener('keydown', onKey);
